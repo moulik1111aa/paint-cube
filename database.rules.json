@@ -1,0 +1,23 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$code": {
+        ".read": "auth != null && (!data.child('guest').exists() || data.child('host/uid').val() === auth.uid || data.child('guest/uid').val() === auth.uid)",
+        ".write": "auth != null && $code.matches(/^[A-HJKMNP-Z2-9]{5}$/) && (!data.exists() ? newData.child('host/uid').val() === auth.uid : (data.child('host/uid').val() === auth.uid || (now - data.child('active').val() > 7200000 && newData.child('host/uid').val() === auth.uid)))",
+        "guest": {
+          ".write": "auth != null && root.child('rooms/' + $code + '/host').exists() && (data.exists() ? data.child('uid').val() === auth.uid : newData.child('uid').val() === auth.uid)",
+          "name": { ".validate": "newData.isString() && newData.val().length <= 14" }
+        },
+        "request": {
+          ".write": "auth != null && root.child('rooms/' + $code + '/guest/uid').val() === auth.uid",
+          ".validate": "!newData.exists() || (newData.child('by').val() === auth.uid && newData.child('json').isString() && newData.child('json').val().length < 400)"
+        },
+        "host": {
+          "name": { ".validate": "newData.isString() && newData.val().length <= 14" }
+        }
+      }
+    }
+  }
+}

@@ -115,3 +115,47 @@ test('twisting: swipe, confirm, refused when you twisted last turn, cancel chang
   expect(await page.evaluate(() => JSON.stringify(window.__game!.state()))).toBe(before);
   expect(errors).toEqual([]);
 });
+
+test('online: create a room, a guest joins by code, moves flow both ways, host runs the rounds', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: '', mode: 'rotating', sound: false })));
+  await page.goto('/?manual&memrelay');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="online"]');
+  await page.click('[data-mode="rotating"]');
+  await page.click('[data-go="create"]');
+  await expect(page.locator('.screen.lobby .code')).toHaveText(/^[A-HJKMNP-Z2-9]{5}$/);
+  const code = (await page.locator('.screen.lobby .code').textContent())!;
+
+  type Mem = { join: (c: string, n: string) => Promise<void>; submit: (m: unknown) => unknown };
+  await page.evaluate((c) => (window as unknown as { __mem: Mem }).__mem.join(c.toLowerCase(), 'Riya'), code);
+  await expect(page.locator('.tagbox.p2 b')).toHaveText('Riya');
+  await expect(page.locator('.tagbox.p1')).toHaveClass(/me/);
+  await expect(page.locator('.turn')).toContainText('Your turn');
+
+  const guest = async (cell: number) => {
+    expect(await page.evaluate((c) => (window as unknown as { __mem: Mem }).__mem.submit({ kind: 'place', cell: c }), cell)).toBeNull();
+    // The host's state arrives and animates on the manual clock: keep stepping until it lands.
+    for (let i = 0; i < 400; i++) {
+      await page.evaluate(() => window.__game!.advance(1 / 20, false));
+      if (await page.evaluate((c) => window.__game!.state()!.round.cells[c] === 1 && !window.__game!.busy(), cell)) break;
+    }
+    await settle(page);
+  };
+  await tap(page, 0);
+  await expect(page.locator('.turn')).toContainText("Riya's turn");
+  await tap(page, 4); // not my turn: refused
+  await expect(page.locator('.toast')).toContainText("Riya's turn");
+  await guest(9);
+  await tap(page, 1);
+  await guest(10);
+  await tap(page, 2);
+  await expect(page.locator('.result h2')).toContainText('Akshat takes round 1');
+  await page.click('[data-go="next"]');
+  await settle(page);
+  await expect(page.locator('.turn')).toContainText("Riya's turn");
+  await expect(page.locator('.result')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

@@ -9,12 +9,16 @@ import { fontsReady } from '../render/street.ts';
 import { Sfx } from '../audio/sfx.ts';
 import { coord, type Player } from '../core/geometry.ts';
 import type { Twist } from '../core/twist.ts';
-import type { IllegalReason } from '../core/events.ts';
+import type { GameEvent, IllegalReason } from '../core/events.ts';
 import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
 import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
 import { rng } from '../core/rng.ts';
 import { cleanName, loadPrefs, savePrefs, type Prefs } from '../storage/prefs.ts';
 import { haptics } from '../platform/haptics.ts';
+import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
+import { connectFirebase } from '../net/firebase.ts';
+import { FIREBASE } from '../net/config.ts';
+import { MemoryHub, MemoryRelay, type Relay } from '../net/relay.ts';
 
 declare global {
   interface Window {
@@ -36,6 +40,7 @@ const COLORS = ['p1', 'p2'] as const;
 
 const REASONS: Partial<Record<IllegalReason, string>> = {
   core: "That's the Core. Nobody can paint it.",
+  'not-your-turn': 'Not your turn yet.',
   occupied: 'Already painted. Pick an empty cell.',
   'column-full': 'That column is full.',
   'twisted-last-turn': 'You twisted last turn.',
@@ -60,6 +65,16 @@ export function startApp(app: HTMLElement): void {
   let match: MatchState | null = null;
   let names: [string, string] = ['Player 1', 'Player 2'];
   let busy = false;
+  // Online: the session, its latest view, and animation bookkeeping.
+  let online: OnlineSession | null = null;
+  let view: RoomView | null = null;
+  let relay: Promise<Relay> | null = null;
+  let tickTimer = 0;
+  let chain: Promise<void> = Promise.resolve();
+  let awaiting = 0;
+  let shown = '';
+  const meOf = () => (online ? online.me : null);
+  const isMyTurn = () => !online || (match ? match.round.turn === online.me : false);
 
   ui.innerHTML = '<div class="screen loading"><h1 class="logo"><span class="p1">Paint</span><span class="p2">Cube</span></h1></div>';
 
@@ -139,12 +154,16 @@ export function startApp(app: HTMLElement): void {
       'home',
       `<h1 class="sr-only">Paint Cube</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
         '<div class="stack"><button class="btn big" data-go="local">Play local</button>' +
-        '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>' +
+        (onlineReady()
+          ? '<button class="btn big alt" data-go="online">Play online</button></div>'
+          : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
         `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button></div>` +
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
+    void leaveOnline();
     ui.querySelector('[data-go="local"]')!.addEventListener('click', () => (sfx.unlock(), localSetup()));
+    ui.querySelector('[data-go="online"]')?.addEventListener('click', () => (sfx.unlock(), onlineMenu()));
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
     ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
       prefs = { ...prefs, sound: !prefs.sound };
@@ -205,7 +224,7 @@ export function startApp(app: HTMLElement): void {
         '<p class="turn"></p>',
     );
     ui.querySelector('.back')!.addEventListener('click', () => {
-      if (confirm('Leave this match?')) homeScreen();
+      if (confirm(online ? 'Leave the room? The match ends.' : 'Leave this match?')) homeScreen();
     });
     updateHud();
   }
@@ -222,13 +241,34 @@ export function startApp(app: HTMLElement): void {
     (ui.querySelector('.round') as HTMLElement).textContent = `R${match.roundNumber}`;
     const turn = ui.querySelector('.turn') as HTMLElement;
     turn.className = `turn ${COLORS[r.turn]}`;
-    turn.textContent = r.result ? '' : `${names[r.turn]} · ${r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop'}`;
-    if (board) board.twistEnabled = r.mode === 'rotating' && !r.result && !busy;
+    const how = r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop';
+    if (r.result) turn.textContent = '';
+    else if (!online) turn.textContent = `${names[r.turn]} · ${how}`;
+    else {
+      const t = view?.timeLeft;
+      const clock = t === null || t === undefined ? '' : ` · ${t}s`;
+      turn.textContent = r.turn === online.me ? `Your turn${clock} · ${how}` : `${names[r.turn]}'s turn${clock}`;
+    }
+    ui.querySelectorAll<HTMLElement>('.tagbox').forEach((el) => el.classList.toggle('me', meOf() === Number(el.dataset.p)));
+    let away = ui.querySelector('.away') as HTMLElement | null;
+    if (online && view?.awayLeft !== null && view?.awayLeft !== undefined && !view.ended) {
+      if (!away) {
+        away = document.createElement('p');
+        away.className = 'away';
+        ui.querySelector('.screen')?.appendChild(away);
+      }
+      away.textContent = `${names[online.me === 0 ? 1 : 0]} dropped · waiting ${view.awayLeft}s`;
+    } else away?.remove();
+    if (board) board.twistEnabled = r.mode === 'rotating' && !r.result && !busy && !awaiting && isMyTurn();
   }
 
   // Twists: a swipe on the cube asks first, then holds a preview until confirmed.
   function onTwistIntent(t: Twist): boolean {
-    if (!match || screen !== 'match' || busy || match.round.result) return false;
+    if (!match || screen !== 'match' || busy || awaiting || match.round.result) return false;
+    if (!isMyTurn()) {
+      toast(`${names[match.round.turn]}'s turn.`);
+      return false;
+    }
     const why = checkMove(match, { kind: 'twist', twist: t });
     if (why) {
       toast(REASONS[why] ?? 'Not allowed.');
@@ -258,7 +298,12 @@ export function startApp(app: HTMLElement): void {
   }
 
   async function onTap(cell: number): Promise<void> {
-    if (!match || !board || screen !== 'match' || busy || match.round.result) return;
+    if (!match || !board || screen !== 'match' || busy || awaiting || match.round.result) return;
+    if (!isMyTurn()) {
+      board.refuse(cell);
+      toast(`${names[match.round.turn]}'s turn.`);
+      return;
+    }
     const move: Move = match.round.mode === 'rotating' ? { kind: 'place', cell } : { kind: 'drop', column: coord(cell)[0] + 3 * coord(cell)[1] };
     const why = checkMove(match, move);
     if (why) {
@@ -271,6 +316,22 @@ export function startApp(app: HTMLElement): void {
 
   async function doMove(move: Move): Promise<void> {
     if (!match || !board || busy || checkMove(match, move)) return;
+    if (online) {
+      // The new state (and its events) comes back through onView: at once for the
+      // host, after a round trip for the guest.
+      awaiting = Date.now();
+      board.twistEnabled = false;
+      const turnEl = ui.querySelector('.turn') as HTMLElement | null;
+      if (turnEl && online.me === 1) turnEl.textContent = 'Sending…';
+      const why = online.submit(move);
+      if (why) {
+        awaiting = 0;
+        toast(REASONS[why] ?? 'Not allowed.');
+        void board.cancelTwist();
+        updateHud();
+      }
+      return;
+    }
     busy = true;
     board.twistEnabled = false;
     const out = applyMove(match, move);
@@ -291,12 +352,22 @@ export function startApp(app: HTMLElement): void {
       w === null ? 'Draw · replay the round' : over ? `${esc(names[w])} wins the match` : `${esc(names[w])} takes round ${match.roundNumber}`;
     const overlay = document.createElement('div');
     overlay.className = `result ${w === null ? '' : COLORS[w]}`;
+    const guest = online && online.me === 1;
     overlay.innerHTML =
       `<h2>${title}</h2><p class="score">${match.wins[0]} – ${match.wins[1]}</p>` +
-      (over
-        ? '<div class="stack"><button class="btn big" data-go="rematch">Rematch</button><button class="btn alt" data-go="home">Home</button></div>'
-        : '<button class="btn big" data-go="next">Next round</button>');
+      (guest
+        ? `<p class="wait">Waiting for ${esc(names[0])}…</p>${over ? '<button class="btn alt" data-go="home">Home</button>' : ''}`
+        : over
+          ? '<div class="stack"><button class="btn big" data-go="rematch">Rematch</button><button class="btn alt" data-go="home">Home</button></div>'
+          : '<button class="btn big" data-go="next">Next round</button>');
+    ui.querySelector('.result')?.remove();
     ui.querySelector('.screen')!.appendChild(overlay);
+    if (online) {
+      overlay.querySelector('[data-go="next"]')?.addEventListener('click', () => online?.next());
+      overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => online?.next());
+      overlay.querySelector('[data-go="home"]')?.addEventListener('click', homeScreen);
+      return;
+    }
     overlay.querySelector('[data-go="next"]')?.addEventListener('click', () => {
       match = nextRound(match!);
       board?.sync(match.round.cells);
@@ -305,6 +376,190 @@ export function startApp(app: HTMLElement): void {
     });
     overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode));
     overlay.querySelector('[data-go="home"]')?.addEventListener('click', homeScreen);
+  }
+
+  // ---- online ----
+  // Tests: `?memrelay` plays online against an in-page relay; window.__mem drives a guest.
+  const memHub = new URLSearchParams(location.search).has('memrelay') ? new MemoryHub() : null;
+  const onlineReady = () => !!FIREBASE || !!memHub;
+  function getRelay(): Promise<Relay> {
+    if (memHub) return Promise.resolve(new MemoryRelay(memHub, 'uid-me'));
+    if (!FIREBASE) return Promise.reject(new Error('online is not set up'));
+    relay ??= connectFirebase(FIREBASE).catch((e) => {
+      relay = null;
+      throw e;
+    });
+    return relay;
+  }
+
+  function onlineMenu(): void {
+    let mode: Mode = prefs.mode;
+    show(
+      'setup',
+      '<button class="back" aria-label="Back">←</button><h2 class="tag">Play online</h2>' +
+        '<div class="modes">' +
+        '<button class="mode" data-mode="rotating"><b>Twist</b><span>Paint or twist a layer. Max 3 marks; first line of 3 wins.</span></button>' +
+        '<button class="mode" data-mode="cascade"><b>Cascade</b><span>Drop paint; lines burst and chain. First to 5.</span></button>' +
+        '</div><button class="btn big" data-go="create">Create room</button>' +
+        `<form class="card join"><label for="code">Got a code?</label><input id="code" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABC23">` +
+        '<button class="btn" type="submit">Join room</button></form>',
+    );
+    const mark = () => ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+    mark();
+    ui.querySelectorAll<HTMLElement>('.mode').forEach((b) =>
+      b.addEventListener('click', () => {
+        mode = b.dataset.mode as Mode;
+        mark();
+      }),
+    );
+    ui.querySelector('.back')!.addEventListener('click', homeScreen);
+    ui.querySelector('[data-go="create"]')!.addEventListener('click', () => void createRoom(mode));
+    const input = ui.querySelector('#code') as HTMLInputElement;
+    input.addEventListener('input', () => (input.value = normaliseCode(input.value)));
+    ui.querySelector('form.join')!.addEventListener('submit', (e) => {
+      e.preventDefault();
+      void joinRoom(input.value);
+    });
+  }
+
+  async function createRoom(mode: Mode): Promise<void> {
+    prefs = { ...prefs, mode };
+    savePrefs(prefs);
+    toast('Opening a room…');
+    try {
+      const s = await OnlineSession.host(await getRelay(), prefs.nickname, mode);
+      begin(s);
+      lobby(s.code);
+    } catch {
+      toast("Couldn't reach the server. Check your internet.");
+    }
+  }
+
+  async function joinRoom(typed: string): Promise<void> {
+    if (normaliseCode(typed).length !== CODE_LENGTH) return toast(`Codes are ${CODE_LENGTH} characters.`);
+    toast('Joining…');
+    try {
+      begin(await OnlineSession.join(await getRelay(), typed, prefs.nickname));
+    } catch (e) {
+      const msg: Record<JoinError, string> = { 'no-room': 'No room with that code.', full: 'That room is full.', expired: 'That room has closed.' };
+      toast(msg[e as JoinError] ?? "Couldn't reach the server. Check your internet.");
+    }
+  }
+
+  function lobby(code: string): void {
+    show(
+      'lobby',
+      '<button class="back" aria-label="Close room">✕</button><h2 class="tag">Your room</h2>' +
+        `<p class="code" aria-label="Room code">${esc(code)}</p><p class="wait">Waiting for a friend to join…</p>` +
+        '<button class="btn big" data-go="share">Share code</button>',
+    );
+    ui.querySelector('.back')!.addEventListener('click', homeScreen);
+    ui.querySelector('[data-go="share"]')!.addEventListener('click', async () => {
+      const text = `Join my Paint Cube room: ${code}`;
+      try {
+        if (navigator.share) await navigator.share({ text });
+        else {
+          await navigator.clipboard.writeText(code);
+          toast('Code copied.');
+        }
+      } catch {
+        /* share sheet dismissed */
+      }
+    });
+  }
+
+  function begin(s: OnlineSession): void {
+    online = s;
+    view = null;
+    shown = '';
+    awaiting = 0;
+    chain = Promise.resolve();
+    s.connect(onView);
+    clearInterval(tickTimer);
+    tickTimer = window.setInterval(() => {
+      online?.tick();
+      // A request that got no answer: let the player try again.
+      if (awaiting && Date.now() - awaiting > 6000) {
+        awaiting = 0;
+        void board?.cancelTwist();
+        toast('Connection is slow. Try again.');
+        updateHud();
+      }
+    }, 500);
+  }
+
+  async function leaveOnline(): Promise<void> {
+    clearInterval(tickTimer);
+    const s = online;
+    online = null;
+    view = null;
+    awaiting = 0;
+    if (s) await s.leave();
+  }
+
+  function onView(v: RoomView, events: GameEvent[]): void {
+    view = v;
+    names = v.names;
+    if (v.phase === 'ended') return endedOnline(v);
+    if (v.phase !== 'playing' || !v.match) return;
+    if (screen !== 'match') {
+      stopDemo();
+      match = v.match;
+      board?.setMode(match.mode);
+      board?.sync(match.round.cells);
+      shown = JSON.stringify(match.round.cells);
+      matchScreen();
+      return;
+    }
+    const next = v.match;
+    if (events.length) {
+      awaiting = 0;
+      chain = chain.then(async () => {
+        busy = true;
+        board!.twistEnabled = false;
+        await board!.play(events);
+        busy = false;
+        match = next;
+        shown = JSON.stringify(next.round.cells);
+        afterOnlineUpdate();
+      });
+    } else
+      chain = chain.then(() => {
+        const roundChanged = !match || match.roundNumber !== next.roundNumber || match.winner !== next.winner;
+        match = next;
+        const cells = JSON.stringify(next.round.cells);
+        if (cells !== shown) {
+          // A new round, or a state we missed (reconnect): just show it.
+          board?.sync(next.round.cells);
+          shown = cells;
+        }
+        if (roundChanged) ui.querySelector('.result')?.remove();
+        afterOnlineUpdate();
+      });
+  }
+
+  function afterOnlineUpdate(): void {
+    updateHud();
+    if (match?.round.result && !ui.querySelector('.result')) roundOver();
+    if (match && !match.round.result) ui.querySelector('.result')?.remove();
+  }
+
+  function endedOnline(v: RoomView): void {
+    clearInterval(tickTimer);
+    const e = v.ended!;
+    const other = names[v.me === 0 ? 1 : 0];
+    const title = e.reason === 'forfeit' ? (e.winner === v.me ? `${esc(other)} left · you win` : 'You were away too long') : e.reason === 'host-left' ? `${esc(names[0])} closed the room` : 'Room closed';
+    if (screen !== 'match') {
+      toast(title.replace(/&#\d+;/g, ''));
+      if (screen === 'lobby') homeScreen();
+      return;
+    }
+    ui.querySelector('.result')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = `result ${e.winner === null ? '' : COLORS[e.winner]}`;
+    overlay.innerHTML = `<h2>${title}</h2><button class="btn big" data-go="home">Home</button>`;
+    ui.querySelector('.screen')!.appendChild(overlay);
+    overlay.querySelector('[data-go="home"]')!.addEventListener('click', homeScreen);
   }
 
   // ---- boot ----
@@ -324,6 +579,18 @@ export function startApp(app: HTMLElement): void {
     .finally(() => {
       if (prefs.nickname) homeScreen();
       else nicknameScreen();
+      if (memHub) {
+        let guest: OnlineSession | null = null;
+        (window as unknown as { __mem: unknown }).__mem = {
+          join: async (code: string, name: string) => {
+            guest = await OnlineSession.join(new MemoryRelay(memHub, 'uid-guest'), code, name);
+            guest.connect(() => {});
+            setInterval(() => guest?.tick(), 500);
+          },
+          submit: (move: Move) => (guest ? guest.submit(move) : 'no guest'),
+          code: () => online?.code ?? null,
+        };
+      }
       window.__game = {
         ready: true,
         screen: () => screen,

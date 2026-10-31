@@ -50,7 +50,7 @@ test('codes avoid look-alikes and typed codes are normalised', () => {
 
 test('host creates, guest joins with a messy code, the match starts with the host', async () => {
   const { h, g, hr, gr } = await pair();
-  assert.match(h.code, /^[A-HJ-NP-Z2-9]{5}$/);
+  assert.match(h.code, /^[A-HJKMNP-Z2-9]{5}$/);
   assert.equal(h.me, 0);
   assert.equal(g.me, 1);
   assert.equal(hr.last().phase, 'playing');

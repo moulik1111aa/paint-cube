@@ -218,3 +218,37 @@
 .confirm .btn { min-width: 0; }
 .confirm .btn[data-ok] { min-width: 170px; }
 .build { margin: 0; font-size: 11px; font-weight: 700; color: var(--ink-quiet); text-shadow: 0 1px 2px #000; }
+
+/* Online */
+.screen.lobby { justify-content: flex-start; gap: 16px; background: linear-gradient(rgba(11, 8, 22, 0.5), rgba(11, 8, 22, 0.85)); }
+.code {
+  margin: 10px 0 0;
+  font-weight: 900;
+  font-size: 64px;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  -webkit-text-stroke: 8px #0d0a14;
+  paint-order: stroke fill;
+  transform: rotate(-3deg);
+  filter: drop-shadow(4px 5px 0 #120b1f);
+}
+.wait { margin: 0; font-weight: 700; color: var(--ink); text-shadow: 0 2px 3px #000; }
+.card.join { margin-top: 6px; }
+.card.join input { text-transform: uppercase; letter-spacing: 0.2em; text-align: center; }
+.tagbox.me b::after { content: ' (you)'; font-weight: 700; font-size: 12px; }
+.away {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 92px);
+  left: 50%;
+  transform: translateX(-50%) rotate(-1deg);
+  margin: 0;
+  padding: 8px 14px;
+  border: 3px solid #000;
+  border-radius: 12px;
+  background: #ff3d8b;
+  color: #0b0b12;
+  font-weight: 900;
+  font-size: 14px;
+  white-space: nowrap;
+  box-shadow: 0 3px 0 #000;
+}
