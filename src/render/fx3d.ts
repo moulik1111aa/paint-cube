@@ -107,6 +107,7 @@ export class Fx {
       im.frustumCulled = false;
       im.count = 0;
       im.setColorAt(0, new T.Color());
+      im.layers.set(1);
       this.group.add(im);
     }
     this.splats = [0, 1, 2, 3].map((i) => splatTexture(T, i * 7 + 3));
@@ -172,6 +173,7 @@ export class Fx {
     const mat = new T.SpriteMaterial({ map: this.splats[Math.floor(Math.random() * 4)], color, transparent: true, depthWrite: false, rotation: Math.random() * Math.PI * 2 });
     const s = new T.Sprite(mat);
     s.position.copy(pos);
+    s.layers.set(1);
     s.renderOrder = 5;
     this.group.add(s);
     this.sprites.push({ s, life, max: life, grow: size, from: size * 0.3, fade: 0.55, spin: (Math.random() - 0.5) * 0.6 });
@@ -183,6 +185,7 @@ export class Fx {
     const mat = new T.SpriteMaterial({ map: this.ringTex, color: new T.Color(color).multiplyScalar(1.6), transparent: true, depthWrite: false, blending: T.AdditiveBlending });
     const s = new T.Sprite(mat);
     s.position.copy(pos);
+    s.layers.set(1);
     s.renderOrder = 6;
     this.group.add(s);
     this.sprites.push({ s, life, max: life, grow: size, from: size * 0.15, fade: 0.0, spin: 0 });

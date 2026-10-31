@@ -142,7 +142,7 @@ export function makeMaterials(T: Three, env: any): Materials {
   const ramp = toonRamp(T);
   return {
     ramp,
-    casing: new T.MeshStandardMaterial({ color: '#2a2644', roughness: 0.24, metalness: 0.3, envMap: env, envMapIntensity: 1.35 }),
+    casing: new T.MeshStandardMaterial({ color: '#a9a4bb', roughness: 0.7, metalness: 0.0, envMap: env, envMapIntensity: 0.45 }),
     casingEdge: new T.MeshBasicMaterial({ color: '#5b4fd6', transparent: true, opacity: 0.55 }),
     core: new T.MeshStandardMaterial({ color: CORE_COLOR, emissive: CORE_COLOR, emissiveIntensity: 2.4, roughness: 0.3 }),
     paint: [

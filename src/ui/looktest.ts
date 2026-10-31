@@ -5,7 +5,8 @@
 
 import { loadThree, makeRenderer, RenderLoop, softEnv, disposeAll, type Three } from '../render/three.ts';
 import { Post } from '../render/post.ts';
-import { makeMaterials, roundedBox, backdropTexture, glowTexture, PLAYER_COLORS, CORE_COLOR, type Materials } from '../render/look.ts';
+import { makeMaterials, roundedBox, PLAYER_COLORS, CORE_COLOR, type Materials } from '../render/look.ts';
+import { wallTexture, groundTexture, burstTexture, fontsReady } from '../render/street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from '../render/fx3d.ts';
 import { Sfx } from '../audio/sfx.ts';
 import { CELLS, CENTER, LINES, coord, type Line, type Player } from '../core/geometry.ts';
@@ -37,7 +38,7 @@ export function showLookTest(app: HTMLElement): () => void {
   const b = window.__BUILD__;
   root.innerHTML =
     '<div class="stage"></div>' +
-    '<header><h1><span class="p1">Paint</span> <span class="p2">Cube</span></h1>' +
+    '<header><h1 class="sr-only">Paint Cube</h1>' +
     `<p class="meta">Look test · build ${b?.build ?? 'dev'} · <b class="fps">--</b> fps</p></header>` +
     `<nav class="actions">${ACTIONS.map(([k, l]) => `<button type="button" data-act="${k}">${l}</button>`).join('')}</nav>` +
     '<p class="hint">Drag to spin · tap a cell to paint it</p>';
@@ -46,8 +47,8 @@ export function showLookTest(app: HTMLElement): () => void {
 
   let stop: (() => void) | null = null;
   let gone = false;
-  loadThree()
-    .then((T) => {
+  Promise.all([loadThree(), fontsReady()])
+    .then(([T]) => {
       if (gone) return;
       stop = scene(T, root, stage, manual);
       root.dataset.threeD = 'ok';
@@ -69,6 +70,8 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
   const view = makeRenderer(T, stage);
   const r = view.r;
   r.toneMapping = T.NoToneMapping;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = T.PCFSoftShadowMap;
   let pixelRatio = Math.min(2, devicePixelRatio || 1);
   r.setPixelRatio(pixelRatio);
   const post = new Post(T, r);
@@ -78,26 +81,40 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
   const shake = new Shake();
 
   const world = new T.Scene();
-  world.background = backdropTexture(T);
+  world.background = new T.Color('#0b0816');
   const env = softEnv(T, r, '#9a8cff', '#0a0912');
   const M: Materials = makeMaterials(T, env);
-  const camera = new T.PerspectiveCamera(38, 1, 0.1, 100);
+  const camera = new T.PerspectiveCamera(38, 1, 0.5, 80);
+  camera.layers.enable(1);
 
-  world.add(new T.HemisphereLight('#c9b8ff', '#1a1230', 0.75));
-  const key = new T.DirectionalLight('#fff0dd', 2.0);
-  key.position.set(3, 6, 5);
-  world.add(key);
-  const rim = new T.DirectionalLight('#ff4fa3', 1.5);
-  rim.position.set(-5, 3, -4);
+  // Night alley: cool blue ambience, a warm streetlamp casting shadows, a magenta rim.
+  world.add(new T.HemisphereLight('#7c6cff', '#1a1020', 1.1));
+  const lamp = new T.SpotLight('#ffd29a', 3.4, 0, 0.62, 0.75, 0);
+  lamp.position.set(-4.5, 8, 7);
+  lamp.target.position.set(0.5, -1, -2);
+  lamp.castShadow = true;
+  lamp.shadow.mapSize.set(1024, 1024);
+  lamp.shadow.bias = -0.0006;
+  lamp.shadow.radius = 4;
+  world.add(lamp, lamp.target);
+  const rim = new T.DirectionalLight('#ff4fa3', 1.4);
+  rim.position.set(5, 3, -4);
   world.add(rim);
-  const fill = new T.DirectionalLight('#38d6ff', 0.8);
-  fill.position.set(-4, -3, 4);
+  const fill = new T.DirectionalLight('#38d6ff', 0.6);
+  fill.position.set(-4, -2, 5);
   world.add(fill);
-  // A pool of violet light behind the cube, so its silhouette separates from the dark.
-  const pool = new T.Sprite(new T.SpriteMaterial({ map: glowTexture(T), color: '#6d3cff', transparent: true, opacity: 0.55, depthWrite: false }));
-  pool.position.set(0, 0.2, -7);
-  pool.scale.set(14, 14, 1);
-  world.add(pool);
+
+  // The alley: a graffiti wall behind and a concrete ground under the floating cube.
+  const wallTex = wallTexture(T);
+  const wall = new T.Mesh(new T.PlaneGeometry(12, 18), new T.MeshStandardMaterial({ map: wallTex, roughness: 0.95 }));
+  wall.position.set(0, 3, -5);
+  wall.receiveShadow = true;
+  world.add(wall);
+  const ground = new T.Mesh(new T.PlaneGeometry(40, 30), new T.MeshStandardMaterial({ map: groundTexture(T), roughness: 0.9 }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.set(0, -2.6, 10);
+  ground.receiveShadow = true;
+  world.add(ground);
 
   const cube = new T.Group();
   world.add(cube);
@@ -122,12 +139,15 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
       continue;
     }
     const m = new T.Mesh(casingGeo, M.casing);
+    m.castShadow = true;
+    m.receiveShadow = true;
     m.position.copy(slot(i));
     m.userData.cell = i;
     cube.add(m);
     casings.push(m);
   }
   const core = new T.Mesh(new T.IcosahedronGeometry(0.27, 1), M.core);
+  core.castShadow = true;
   cube.add(core);
   const coreLight = new T.PointLight(CORE_COLOR, 7, 3.2, 1.6);
   cube.add(coreLight);
@@ -143,6 +163,8 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
   function makeShell(p: Player, seed: number): any {
     const g = new T.Group();
     const body = new T.Mesh(shellGeo, M.paint[p]);
+    body.castShadow = true;
+    body.receiveShadow = true;
     const hull = new T.Mesh(shellGeo, M.ink);
     hull.scale.setScalar(1.07);
     g.add(hull, body);
@@ -165,6 +187,67 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
       g.add(dh, drip);
     }
     return g;
+  }
+
+  // Spray paint runs: drips crawl down the face that looks at the camera.
+  const dripRod = new T.CylinderGeometry(1, 1, 1, 8, 1);
+  dripRod.translate(0, -0.5, 0);
+  function addDrips(shell: any, cell: number, p: Player): void {
+    cube.updateMatrixWorld();
+    const centre = slot(cell);
+    const toCam = cube.worldToLocal(camera.position.clone()).sub(centre).normalize();
+    const down = cube.worldToLocal(new T.Vector3(0, -1, 0).add(cube.getWorldPosition(new T.Vector3()))).normalize();
+    const axes = [new T.Vector3(1, 0, 0), new T.Vector3(0, 1, 0), new T.Vector3(0, 0, 1)];
+    const faces = axes.flatMap((a) => [a.clone(), a.clone().negate()]).filter((f) => Math.abs(f.dot(down)) < 0.7);
+    faces.sort((a, b) => b.dot(toCam) - a.dot(toCam));
+    const face = faces[0];
+    if (!face) return;
+    const run = down.clone().addScaledVector(face, -down.dot(face)).normalize();
+    const across = new T.Vector3().crossVectors(face, run).normalize();
+    const count = 1 + Math.floor(Math.random() * 2);
+    for (let k = 0; k < count; k++) {
+      const start = face.clone().multiplyScalar(0.44).addScaledVector(across, (Math.random() - 0.5) * 0.5).addScaledVector(run, -0.05);
+      const len = 0.3 + Math.random() * 0.35;
+      const w = 0.035 + Math.random() * 0.025;
+      const g = new T.Group();
+      g.position.copy(start);
+      g.quaternion.setFromUnitVectors(new T.Vector3(0, -1, 0), run);
+      const rod = new T.Mesh(dripRod, M.paint[p]);
+      const tip = new T.Mesh(dripGeo, M.paint[p]);
+      rod.scale.set(w, 0.001, w);
+      tip.scale.setScalar(w * 1.5);
+      g.add(rod, tip);
+      shell.add(g);
+      void anim(1.3 + Math.random() * 0.6, (t) => {
+        const l = len * ease.outCubic(t);
+        rod.scale.y = Math.max(0.001, l);
+        tip.position.y = -l;
+      });
+    }
+  }
+
+  // Comic captions ("LINE!", "WIN!"): pop in, hold, fade.
+  const captionTex = new Map<string, any>();
+  async function caption(text: string, fill: string, at: any, size: number): Promise<void> {
+    const key = text + fill;
+    if (!captionTex.has(key)) captionTex.set(key, burstTexture(T, text, fill));
+    const s = new T.Sprite(new T.SpriteMaterial({ map: captionTex.get(key), transparent: true, depthTest: false, depthWrite: false }));
+    s.layers.set(1);
+    s.renderOrder = 20;
+    s.position.copy(at);
+    world.add(s);
+    await anim(0.22, (k) => {
+      const g = size * ease.outBack(k);
+      s.scale.set(g, g, 1);
+      s.material.rotation = (1 - k) * 0.5;
+    });
+    await anim(0.55, (k) => (s.material.rotation = Math.sin(k * 9) * 0.03));
+    await anim(0.25, (k) => {
+      s.material.opacity = 1 - k;
+      s.scale.setScalar(size * (1 + k * 0.15));
+    });
+    world.remove(s);
+    s.material.dispose();
   }
 
   // Pulses that decay back to the resting look.
@@ -225,6 +308,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     shell.scale.setScalar(0.2);
     cube.add(shell);
     shells[cell] = shell;
+    addDrips(shell, cell, p);
     await anim(0.5, (k) => shell.scale.setScalar(0.2 + 0.8 * ease.outElastic(k)));
   }
 
@@ -243,6 +327,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     const len = a.distanceTo(c);
     const beam = new T.Mesh(new T.CylinderGeometry(0.09, 0.09, len + 0.5, 12, 1, true), new T.MeshBasicMaterial({ color: new T.Color(color).multiplyScalar(3), transparent: true, opacity: 0.9, depthTest: false, blending: T.AdditiveBlending }));
     beam.renderOrder = 10;
+    beam.layers.set(1);
     beam.position.copy(a).lerp(c, 0.5);
     beam.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), c.clone().sub(a).normalize());
     beam.scale.set(0.01, 1, 0.01);
@@ -258,6 +343,8 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     });
     hit({ freeze: 0.09, shake: 0.75, bloom: 1.6, aberr: 0.018, flash: 0.18 });
     sfx.burst(wave);
+    const mid = toWorld(line[1]);
+    void caption(wave > 1 ? `x${wave}!` : 'LINE!', '#f5e663', mid.clone().addScaledVector(towardCamera(mid), 2.2), 3.4);
     for (const i of line) {
       const pos = toWorld(i);
       fx.burst(pos, color, 70, 6.8, 0.085);
@@ -346,6 +433,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     hit({ bloom: 1.4, flash: 0.22, shake: 0.6, aberr: 0.015 });
     sfx.win();
     fx.ring(toWorld(CENTER), color, 4.2, 0.8);
+    void caption('WIN!', '#ff3d8b', toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 3), 3.4);
     const jobs: Promise<void>[] = [];
     for (let i = 0; i < CELLS; i++) {
       if (i === CENTER) continue;
@@ -483,6 +571,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
   let fpsT = 0;
   let slowFor = 0;
   const fpsEl = root.querySelector('.fps') as HTMLElement;
+  let shakeOff: [number, number, number] = [0, 0, 0];
   const size = new T.Vector2();
 
   function update(real: number): void {
@@ -491,7 +580,13 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     fx.update(dt);
     if (!dragging) {
       vyaw *= Math.exp(-3 * real);
-      yaw += vyaw * real + (now - lastInput > 2.5 ? 0.09 * real : 0);
+      yaw += vyaw * real;
+      // Idle: drift back towards a corner view and sway gently around it.
+      if (now - lastInput > 2.5) {
+        const home = Math.round((yaw - 0.785) / (Math.PI / 2)) * (Math.PI / 2) + 0.785 + Math.sin(now * 0.35) * 0.32;
+        yaw += (home - yaw) * Math.min(1, real * 0.8);
+        pitch += (0.5 - pitch) * Math.min(1, real * 0.8);
+      }
     }
     cube.rotation.set(pitch, yaw, 0, 'XYZ');
     const s = 1 + Math.sin(now * 3) * 0.06;
@@ -504,10 +599,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     pulse.bloom *= decay;
     pulse.aberr *= decay;
     pulse.flash *= Math.exp(-9 * real);
-    const [sx, sy, roll] = shake.update(real);
-    camera.position.x = sx;
-    camera.position.y = sy;
-    camera.rotation.z = roll;
+    shakeOff = shake.update(real);
   }
 
   function render(): void {
@@ -515,9 +607,16 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     const aspect = view.w / view.h;
     const v = (camera.fov * Math.PI) / 180;
     const hfov = 2 * Math.atan(Math.tan(v / 2) * aspect);
-    camera.position.z = 2.65 / Math.sin(Math.min(v, hfov) / 2);
+    const dist = 2.65 / Math.sin(Math.min(v, hfov) / 2);
+    camera.position.set(shakeOff[0], 0.9 + shakeOff[1], dist);
+    camera.lookAt(0, 0.1, 0);
+    camera.rotateZ(shakeOff[2]);
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
+    const wallW = Math.max(12, 2 * Math.tan(hfov / 2) * (dist + 5) * 1.15);
+    wall.scale.x = wallW / 12;
+    wallTex.repeat.x = wallW / 12;
+    wallTex.offset.x = -(wallW / 12 - 1) / 2;
     r.getDrawingBufferSize(size);
     post.setSize(size.x, size.y);
     post.strength = 0.75 + pulse.bloom;

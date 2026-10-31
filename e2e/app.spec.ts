@@ -8,6 +8,7 @@ test('look test loads the 3D scene and every effect runs without errors', async 
 
   await page.goto('/?manual');
   await expect(page.locator('.look h1')).toHaveText('Paint Cube');
+  await expect(page.locator('.look .meta')).toContainText('Look test');
   await expect(page.locator('.look')).toHaveAttribute('data-three-d', 'ok', { timeout: 15_000 });
   await expect(page.locator('.look .gl')).toBeVisible();
   for (const act of ['splat', 'splat', 'twist', 'line', 'fade', 'win', 'reset']) {
