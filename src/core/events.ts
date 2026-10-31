@@ -40,7 +40,8 @@ export type IllegalReason =
   | 'not-a-column'
   | 'column-full'
   | 'wrong-mode'
-  | 'match-over';
+  | 'match-over'
+  | 'not-your-turn';
 
 export class IllegalMove extends Error {
   readonly reason: IllegalReason;
