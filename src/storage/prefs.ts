@@ -6,6 +6,8 @@ import type { MatchState, Mode } from '../core/match.ts';
 import { AGENT_IDS, type AgentId } from '../core/agents.ts';
 
 export type HelpTopic = Mode | 'agents';
+export type PcLevel = 'easy' | 'normal' | 'hard';
+const isLevel = (x: unknown): x is PcLevel => x === 'easy' || x === 'normal' || x === 'hard';
 
 export interface Prefs {
   nickname: string;
@@ -20,10 +22,12 @@ export interface Prefs {
   picks: [AgentId, AgentId];
   /** Read the tutorials aloud. */
   voice: boolean;
+  /** Last vs-PC difficulty. */
+  pcLevel: PcLevel;
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal' };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -39,6 +43,7 @@ export function loadPrefs(): Prefs {
       seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is HelpTopic => m === 'rotating' || m === 'cascade' || m === 'agents') : [],
       agents: p.agents === true,
       voice: p.voice !== false,
+      pcLevel: isLevel(p.pcLevel) ? p.pcLevel : 'normal',
       picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],
     };
   } catch {
@@ -63,6 +68,8 @@ export function cleanName(s: string): string {
 export interface SavedMatch {
   match: MatchState;
   names: [string, string];
+  /** Against the PC (player 2), at this difficulty. */
+  pc?: PcLevel;
 }
 
 const MATCH_KEY = 'paintcube.local';

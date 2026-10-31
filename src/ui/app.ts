@@ -13,14 +13,14 @@ import { landing } from '../core/cascade.ts';
 import type { Twist } from '../core/twist.ts';
 import type { GameEvent, IllegalReason } from '../core/events.ts';
 import { applyMove, checkMove, legalMoves, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
-import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
+import { rotatingBotMove, cascadeBotMove, agentBotTurn } from '../sim/bot.ts';
 import { rng } from '../core/rng.ts';
-import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type HelpTopic, type Prefs } from '../storage/prefs.ts';
+import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type HelpTopic, type PcLevel, type Prefs } from '../storage/prefs.ts';
 import {
   AGENTS, AGENT_IDS, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
   type AbilityId, type AbilityUse, type AgentId, type AgentsState, type AgentRound,
 } from '../core/agents.ts';
-import { LINES } from '../core/geometry.ts';
+import { CENTER, LINES } from '../core/geometry.ts';
 import { ABILITY_TEXT, AGENT_LOOK, abilityIcon, abilityText, agentArt, playPreview } from './agents-ui.ts';
 import { haptics } from '../platform/haptics.ts';
 import { voice } from '../platform/voice.ts';
@@ -57,9 +57,9 @@ const HELP: Record<HelpTopic, { title: string; cards: [string, string, Topic?][]
     title: 'Agents',
     cards: [
       ['Using a power', 'Your writer has 3 powers and an ultimate, in the bar at the bottom. On your turn: tap a power, tap a glowing cell, then make your normal move.', 'powers'],
-      ['Wet paint', 'Paint from a power drips: it’s wet. A row with wet paint doesn’t count straight away. It counts once it dries, a couple of turns later, if it’s still whole. So the other player always gets a chance to answer.', 'wet'],
+      ['Wet paint', '<b>What it does:</b> wet paint drips. A row with wet paint in it doesn’t count yet (in Cascade, it doesn’t burst or score yet).<br><b>What makes paint wet:</b> paint a power puts down or moves; your move on a turn you used Shove, Overspray, Spin or Fixative (in Twist, also Flip or Rewind); your next mark after the other player uses Delay.<br><b>When it dries:</b> at the start of your turn after next. If the row is still whole then, it counts. So the other player gets two turns to break it.', 'wet'],
       ['Timers', 'After you use a power, a number shows on it: how many of your turns until it’s back. Every round starts fresh.', 'timers'],
-      ['Ultimate', 'The last button’s ring fills every turn. When it says READY, fire it. Ultimates hit straight away: they’re never wet.', 'ult'],
+      ['Ultimate', 'The last button’s ring fills every turn, and faster when you lose a round. When it says READY, fire it: it’s your writer’s big move.', 'ult'],
     ],
   },
   rotating: {
@@ -117,6 +117,12 @@ export function startApp(app: HTMLElement): void {
   let screen = 'loading';
   let match: MatchState | null = null;
   let names: [string, string] = ['Player 1', 'Player 2'];
+  /** Playing against the PC (it is player 2), at this difficulty. */
+  let pc: PcLevel | null = null;
+  let pcBusy = false;
+  /** Trial: your powers and ultimate are always ready (vs an easy PC; not saved). */
+  let trial = false;
+  const pcRandom = rng(Date.now() % 100000);
   let busy = false;
   /** A show-me lesson is playing on the cube (the game's input is paused). */
   let lessonOn: (() => void) | null = null;
@@ -131,7 +137,7 @@ export function startApp(app: HTMLElement): void {
   let awaiting = 0;
   let shown = '';
   const meOf = () => (online ? online.me : null);
-  const isMyTurn = () => !online || (match ? match.round.turn === online.me : false);
+  const isMyTurn = () => (online ? (match ? match.round.turn === online.me : false) : !(pc && match && match.round.turn === 1));
 
   ui.innerHTML = '<div class="screen loading"><h1 class="logo"><span class="p1">Paint</span><span class="p2">Cube</span></h1></div>';
 
@@ -258,14 +264,18 @@ export function startApp(app: HTMLElement): void {
   }
 
   function homeScreen(): void {
+    pc = null;
+    trial = false;
     const saved = loadMatch();
     if (screen !== 'nickname') startDemo();
     show(
       'home',
       `<h1 class="sr-only">Paint Cube</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
         '<div class="stack">' +
-        (saved ? `<button class="btn big resume" data-go="resume">Resume · ${esc(saved.names[0])} vs ${esc(saved.names[1])} · R${saved.match.roundNumber}</button>` : '') +
-        '<button class="btn big" data-go="local">Play local</button>' +
+        (saved ? `<button class="btn big resume" data-go="resume">Resume · ${esc(saved.names[0])} vs ${esc(saved.names[1])}${saved.pc ? ` (${saved.pc})` : ''} · R${saved.match.roundNumber}</button>` : '') +
+        '<button class="btn big" data-go="pc">Play vs PC</button>' +
+        '<button class="btn big" data-go="local">Play a friend</button>' +
+        '<button class="btn alt" data-go="trial">Trial · try the powers</button>' +
         (onlineReady()
           ? '<button class="btn big alt" data-go="online">Play online</button></div>'
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
@@ -275,12 +285,15 @@ export function startApp(app: HTMLElement): void {
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
     void leaveOnline();
-    ui.querySelector('[data-go="local"]')!.addEventListener('click', () => (sfx.unlock(), localSetup()));
+    ui.querySelector('[data-go="local"]')!.addEventListener('click', () => (sfx.unlock(), localSetup(false)));
+    ui.querySelector('[data-go="pc"]')!.addEventListener('click', () => (sfx.unlock(), localSetup(true)));
+    ui.querySelector('[data-go="trial"]')!.addEventListener('click', () => (sfx.unlock(), trialSetup()));
     ui.querySelector('[data-go="online"]')?.addEventListener('click', () => (sfx.unlock(), onlineMenu()));
     ui.querySelector('[data-go="resume"]')?.addEventListener('click', () => {
       if (!saved) return;
       sfx.unlock();
       names = saved.names;
+      pc = saved.pc ?? null;
       resumeMatch(saved.match);
     });
     // Tap the build number: how the 3D is running on this phone (for troubleshooting).
@@ -302,13 +315,19 @@ export function startApp(app: HTMLElement): void {
     });
   }
 
-  function localSetup(): void {
+  function localSetup(vsPc: boolean): void {
     let mode: Mode = prefs.mode;
+    let level: PcLevel = prefs.pcLevel;
     show(
       'setup',
-      '<button class="back" aria-label="Back">←</button><h2 class="tag">Local match</h2>' +
+      `<button class="back" aria-label="Back">←</button><h2 class="tag">${vsPc ? 'Vs PC' : 'Local match'}</h2>` +
         `<div class="players"><span class="chip p1">${esc(prefs.nickname)}</span><span class="vs">vs</span>` +
-        `<input class="chip p2" id="p2" maxlength="14" placeholder="Player 2" value="${esc(prefs.player2)}"></div>` +
+        (vsPc
+          ? '<span class="chip p2">PC</span></div>' +
+            `<div class="levels" role="radiogroup" aria-label="Difficulty">${(['easy', 'normal', 'hard'] as const)
+              .map((l) => `<button class="level" data-level="${l}" role="radio">${l === 'easy' ? 'Easy' : l === 'normal' ? 'Normal' : 'Hard'}</button>`)
+              .join('')}</div>`
+          : `<input class="chip p2" id="p2" maxlength="14" placeholder="Player 2" value="${esc(prefs.player2)}"></div>`) +
         '<div class="modes">' +
         '<button class="mode" data-mode="rotating"><b>Twist</b><span>Place paint or twist a layer. Max 3 marks each: your oldest fades. First line of 3 wins.</span></button>' +
         '<button class="mode" data-mode="cascade"><b>Cascade</b><span>Drop paint down columns. Lines burst and score; falls chain into combos. First to 5.</span></button>' +
@@ -322,6 +341,10 @@ export function startApp(app: HTMLElement): void {
       const t = ui.querySelector('[data-agents]') as HTMLElement;
       t.classList.toggle('on', agentsOn);
       t.setAttribute('aria-checked', String(agentsOn));
+      ui.querySelectorAll<HTMLElement>('.level').forEach((b) => {
+        b.classList.toggle('on', b.dataset.level === level);
+        b.setAttribute('aria-checked', String(b.dataset.level === level));
+      });
       (ui.querySelector('[data-go="start"]') as HTMLElement).textContent = agentsOn ? 'Pick agents' : 'Start · best of 3';
     };
     mark();
@@ -335,8 +358,29 @@ export function startApp(app: HTMLElement): void {
         mark();
       }),
     );
+    ui.querySelectorAll<HTMLElement>('.level').forEach((b) =>
+      b.addEventListener('click', () => {
+        level = b.dataset.level as PcLevel;
+        mark();
+      }),
+    );
     ui.querySelector('.back')!.addEventListener('click', homeScreen);
     ui.querySelector('[data-go="start"]')!.addEventListener('click', () => {
+      if (vsPc) {
+        prefs = { ...prefs, mode, agents: agentsOn, pcLevel: level };
+        savePrefs(prefs);
+        names = [prefs.nickname, 'PC'];
+        pc = level;
+        if (!agentsOn) return startMatch(mode);
+        const picks: [AgentId, AgentId] = [prefs.picks[0], AGENT_IDS[Math.floor(Math.random() * AGENT_IDS.length)]];
+        agentSelect(0, mode, picks, () => {
+          prefs = { ...prefs, picks: [picks[0], prefs.picks[1]] };
+          savePrefs(prefs);
+          splash(picks[1], 'PC PICKS', COLORS[1], () => startMatch(mode, picks));
+        });
+        return;
+      }
+      pc = null;
       const p2 = cleanName((ui.querySelector('#p2') as HTMLInputElement).value);
       prefs = { ...prefs, player2: p2, mode, agents: agentsOn };
       savePrefs(prefs);
@@ -516,6 +560,7 @@ export function startApp(app: HTMLElement): void {
   /** Quick review in a match: both writers' powers, with a show-me for each. */
   function review(tab: Player | null = null): void {
     if (!match?.agents) return;
+    if (busy || pcBusy) return void toast('Wait for the move to finish.');
     const a = match.agents;
     const mode = match.mode;
     let t: Player = tab ?? match.round.turn;
@@ -541,8 +586,12 @@ export function startApp(app: HTMLElement): void {
             );
           })
           .join('')}</ul>` +
-        `<div class="topics">${ALL_TOPICS.map((k) => `<button class="chip" data-topic="${k}">${topicLesson(k).title}</button>`).join('')}</div></div>`;
-      sheet.querySelector('[data-close]')!.addEventListener('click', () => sheet.remove());
+        '<div class="wetbox"><b>💧 Wet paint</b><p>A row with wet paint doesn’t count yet. Paint is wet when a power puts it down or moves it, on your move after Shove, Overspray, Spin or Fixative (in Twist, also Flip or Rewind), and on your next mark after the other player’s Delay. It dries at the start of its owner’s turn after next: if the row is still whole then, it counts.</p></div>' +
+        `<div class="topics">${ALL_TOPICS.map((k) => `<button class="chip" data-topic="${k}">▶ ${topicLesson(k).title}</button>`).join('')}</div></div>`;
+      sheet.querySelector('[data-close]')!.addEventListener('click', () => {
+        sheet.remove();
+        maybePc();
+      });
       sheet.querySelectorAll<HTMLElement>('[data-tab]').forEach((x) => x.addEventListener('click', () => ((t = Number(x.dataset.tab) as Player), draw())));
       sheet.querySelectorAll<HTMLElement>('[data-show]').forEach((x) =>
         x.addEventListener('click', () => {
@@ -631,7 +680,8 @@ export function startApp(app: HTMLElement): void {
     });
     ui.querySelector('.back')!.addEventListener('click', () => {
       stopPreview?.();
-      localSetup();
+      if (trial) trialSetup();
+      else localSetup(!!pc);
     });
     ui.querySelector('[data-go="lock"]')!.addEventListener('click', () => {
       stopPreview?.();
@@ -689,7 +739,7 @@ export function startApp(app: HTMLElement): void {
         `<div class="pips">${h.cards.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-skip>${i < h.cards.length - 1 ? 'Skip' : ''}</button>` +
         `<button class="btn" data-next>${i < h.cards.length - 1 ? 'Next' : "Let's play"}</button></div></div>`;
-      voice.say(`${t}. ${body}`);
+      voice.say(`${t}. ${body.replace(/<br>/g, ' ').replace(/<[^>]+>/g, '')}`);
       overlay.querySelector('[data-next]')!.addEventListener('click', () => (i < h.cards.length - 1 ? (i++, draw()) : close()));
       overlay.querySelector('[data-skip]')!.addEventListener('click', close);
       overlay.querySelector('[data-voice]')!.addEventListener('click', () => {
@@ -704,6 +754,7 @@ export function startApp(app: HTMLElement): void {
     const close = () => {
       voice.stop();
       overlay.remove();
+      window.setTimeout(maybePc, 0);
       if (!prefs.seenHelp.includes(mode)) {
         prefs = { ...prefs, seenHelp: [...prefs.seenHelp, mode] };
         savePrefs(prefs);
@@ -730,13 +781,13 @@ export function startApp(app: HTMLElement): void {
 
   /** Keep the local match on the device after every change. */
   const persist = () => {
-    if (!online && match) saveMatch({ match, names });
+    if (!online && match && !trial) saveMatch({ match, names, ...(pc ? { pc } : {}) });
   };
 
   function startMatch(mode: Mode, picks?: [AgentId, AgentId]): void {
     stopDemo();
     match = newMatch(mode, 0, picks);
-    saveMatch({ match, names });
+    persist();
     busy = false;
     if (board) {
       board.attract = false;
@@ -808,7 +859,7 @@ export function startApp(app: HTMLElement): void {
     bar.className = `abilities ${COLORS[p]}`;
     bar.style.setProperty('--accent', AGENT_LOOK[agent].accent);
     bar.hidden = !!r.result;
-    bar.innerHTML = abilityButtons(r, match.agents, p, targeting?.id ?? null, busy);
+    bar.innerHTML = abilityButtons(r, match.agents, p, targeting?.id ?? null, busy || !isMyTurn());
     bar.querySelectorAll<HTMLElement>('[data-ab]').forEach((b) => b.addEventListener('click', () => onAbility(b.dataset.ab as AbilityId)));
   }
 
@@ -845,6 +896,7 @@ export function startApp(app: HTMLElement): void {
 
   function onAbility(id: AbilityId): void {
     if (lessonOn || !match?.agents || !board || screen !== 'match' || busy || match.round.result) return;
+    if (!isMyTurn()) return void toast(`${names[match.round.turn]}'s turn.`);
     if (targeting?.id === id) return cancelTargeting();
     cancelTargeting(false);
     const why = abilityBlocked(match.round, match.agents, id);
@@ -939,6 +991,7 @@ export function startApp(app: HTMLElement): void {
 
   function updateHud(): void {
     if (!match || screen !== 'match') return;
+    trialRefill();
     const r = match.round;
     ui.querySelectorAll<HTMLElement>('.tagbox').forEach((el) => {
       const p = Number(el.dataset.p) as Player;
@@ -955,6 +1008,8 @@ export function startApp(app: HTMLElement): void {
         : match.agents.used ? 'now drop' : 'drop or use a power'
       : r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop';
     if (r.result) turn.textContent = '';
+    else if (pc && r.turn === 1) turn.textContent = 'PC is thinking…';
+    else if (trial) turn.textContent = `Trial · powers always ready · ${how}`;
     else if (!online) turn.textContent = `${names[r.turn]} · ${how}`;
     else {
       const t = view?.timeLeft;
@@ -972,11 +1027,138 @@ export function startApp(app: HTMLElement): void {
       away.textContent = `${names[online.me === 0 ? 1 : 0]} dropped · waiting ${view.awayLeft}s`;
     } else away?.remove();
     if (match.agents) renderAbilities();
+    wetNote();
     if (board) {
       board.twistEnabled = (r.mode === 'rotating' || (targeting?.uses[0].twists?.length ?? 0) > 0) && !r.result && !busy && !awaiting && isMyTurn();
       board.setTurn(r.result || busy || !isMyTurn() ? null : r.turn);
       board.names = [names[0], names[1]];
     }
+    maybePc();
+  }
+
+  // ---- Trial: try any writer's powers, always ready, against an easy PC ----
+  function trialSetup(): void {
+    let mode: Mode = prefs.mode;
+    show(
+      'setup',
+      '<button class="back" aria-label="Back">←</button><h2 class="tag">Trial mode</h2>' +
+        '<p class="note">Pick a writer and play an easy PC. Your powers and ultimate are always ready, so you can try every one as often as you like. Nothing is saved.</p>' +
+        '<div class="modes">' +
+        '<button class="mode" data-mode="rotating"><b>Twist</b><span>Place paint or twist a layer. First line of 3 wins.</span></button>' +
+        '<button class="mode" data-mode="cascade"><b>Cascade</b><span>Drop paint down columns. Lines burst and score.</span></button>' +
+        '</div><button class="btn big" data-go="start">Pick a writer</button>',
+    );
+    const mark = () => ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+    mark();
+    ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.addEventListener('click', () => ((mode = b.dataset.mode as Mode), mark())));
+    ui.querySelector('.back')!.addEventListener('click', homeScreen);
+    ui.querySelector('[data-go="start"]')!.addEventListener('click', () => {
+      names = [prefs.nickname, 'PC'];
+      pc = 'easy';
+      trial = true;
+      const picks: [AgentId, AgentId] = [prefs.picks[0], AGENT_IDS[Math.floor(Math.random() * AGENT_IDS.length)]];
+      agentSelect(0, mode, picks, () => splash(picks[1], 'PC PICKS', COLORS[1], () => startMatch(mode, picks)));
+    });
+  }
+  /** Trial: before each of your turns, every power and the ultimate are ready again. */
+  function trialRefill(): void {
+    if (!trial || !match?.agents || match.round.turn !== 0 || match.agents.used || match.round.result) return;
+    const a = match.agents;
+    const cost = abilityStatus(match.round, a, 0).find((x) => x.ult)?.cost ?? 0;
+    if (a.cd[0].every((c) => c === 0) && a.ult[0] >= cost) return;
+    match = { ...match, agents: { ...a, cd: [[0, 0, 0], a.cd[1]], ult: [Math.max(a.ult[0], cost), a.ult[1]] } };
+  }
+
+  /** Wet rows on the board, and when each will count: shown as a note under the HUD. */
+  function wetNote(): void {
+    let el = ui.querySelector('.wetnote') as HTMLElement | null;
+    const lines: string[] = [];
+    if (match?.agents && !match.round.result) {
+      const r = match.round;
+      const a = match.agents;
+      for (const p of [0, 1] as const) {
+        let left = 0;
+        for (const l of LINES) {
+          if (r.mode === 'rotating' && l.includes(CENTER)) continue;
+          if (!l.every((c) => r.cells[c] === p)) continue;
+          const w = Math.max(...l.map((c) => a.wet[c]));
+          if (w > 0) left = Math.max(left, w);
+        }
+        const o = p === 0 ? 1 : 0;
+        if (left > 0) {
+          const when = left >= 2 ? `at the start of ${esc(names[p])}’s turn after next` : `at the start of ${esc(names[p])}’s next turn`;
+          lines.push(`💧 <b>${esc(names[p])}’s ${r.mode === 'rotating' ? 'row' : 'line'} is wet.</b> It counts ${when} if it’s still whole. ${esc(names[o])}: break it!`);
+        }
+        if (a.delay[p]) lines.push(`💧 <b>Delay:</b> ${esc(names[p])}’s next mark will be wet.`);
+      }
+    }
+    if (!lines.length) return void el?.remove();
+    if (!el) {
+      el = document.createElement('p');
+      el.className = 'wetnote';
+      el.setAttribute('role', 'status');
+      ui.querySelector('.screen')?.appendChild(el);
+    }
+    el.innerHTML = lines.join('<br>');
+  }
+
+  // ---- vs PC: the PC is player 2 and plays its turn by itself ----
+  const PC_OPTS: Record<PcLevel, { noise: number; samples: number; ultChance: number }> = {
+    easy: { noise: 1.6, samples: 3, ultChance: 0.3 },
+    normal: { noise: 0.45, samples: 6, ultChance: 0.15 },
+    hard: { noise: 0.08, samples: 10, ultChance: 0.1 },
+  };
+  function maybePc(): void {
+    if (!pc || pcBusy || !match || online || screen !== 'match' || busy || lessonOn || match.round.result || match.winner !== null) return;
+    if (match.round.turn !== 1 || ui.querySelector('.help, .review, .result')) return;
+    pcBusy = true;
+    window.setTimeout(() => void pcTurn(), 0);
+  }
+  async function pcTurn(): Promise<void> {
+    const m0 = match;
+    if (!m0 || !board || !pc) return void (pcBusy = false);
+    busy = true;
+    board.twistEnabled = false;
+    board.setTurn(null);
+    renderAbilities();
+    await sleep(0.8);
+    const o = PC_OPTS[pc];
+    let moves: Move[];
+    try {
+      moves = m0.agents
+        ? agentBotTurn(m0, pcRandom, { noise: o.noise, usePowers: true, ultChance: o.ultChance, samples: o.samples })
+        : m0.round.mode === 'rotating'
+          ? [rotatingBotMove(m0.round, pcRandom, o.noise)]
+          : [cascadeBotMove(m0.round, pcRandom, o.noise)];
+    } catch {
+      moves = [];
+    }
+    if (!moves.length || checkMove(m0, moves[0])) moves = [legalMoves(m0)[0]];
+    for (const mv of moves) {
+      if (moves.indexOf(mv) === 0 && match !== m0) break;
+      if (!match || screen !== 'match' || !pc || checkMove(match, mv)) break;
+      if (mv.kind === 'ability') {
+        const bar = ui.querySelector('.abilities');
+        bar?.querySelector(`[data-ab="${mv.id}"]`)?.classList.add('tapme');
+        if (mv.cells?.length) board.highlight(mv.cells, PLAYER_COLORS_CSS[1]);
+        await sleep(0.8);
+        board.highlight(null);
+        if (isUlt(mv.id)) splash(match.agents!.picks[1], ABILITY_TEXT[mv.id].name.toUpperCase(), COLORS[1]);
+      }
+      const out = applyMove(match, mv);
+      match = out.state;
+      persist();
+      renderAbilities();
+      await board.play(out.events);
+      if (match.agents) board.decorate(decorOf(match.round, match.agents));
+      if (match.round.result) break;
+      await sleep(0.3);
+    }
+    busy = false;
+    pcBusy = false;
+    if (!match || screen !== 'match') return;
+    updateHud();
+    if (match.round.result) roundOver();
   }
 
   /** Marks that fade on their owner's next placement (shown cracked). */
@@ -1170,6 +1352,7 @@ export function startApp(app: HTMLElement): void {
   }
 
   function onlineMenu(): void {
+    pc = null;
     let mode: Mode = prefs.mode;
     show(
       'setup',
@@ -1375,7 +1558,7 @@ export function startApp(app: HTMLElement): void {
         ready: true,
         screen: () => screen,
         tap: (c) => onTap(c),
-        busy: () => busy,
+        busy: () => busy || pcBusy,
         swipe: (c, dx, dy) => !!board?.swipe(c, dx, dy),
         aim: (c) => board?.aim(c),
         advance: (sec, draw = true) => board?.advance(sec, draw),

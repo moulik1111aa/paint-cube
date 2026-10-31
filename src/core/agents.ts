@@ -3,8 +3,9 @@
 // Powers run on timers (cooldowns, durations), and paint they place or move is "wet":
 // a line that includes wet paint only counts once it has dried (at the start of its
 // owner's turn, `dryTurns` turns later) and only if it is still intact then. Powers
-// that move, wipe or seal paint also make that turn's move wet. So a basic power never
-// wins a round on its own: the other side always gets a reply. Ultimates aren't wet.
+// that move, wipe or seal paint also make that turn's move wet, and in Twist so do the
+// Rewind and Flip ultimates. So no power wins a Twist round on its own: the other side
+// always gets a reply. Chrome and Lockdown, and Cascade's Flip and Rewind, act at once.
 //
 // Pure rules on JSON-safe state, like the rest of src/core. The classic engines
 // (rotating.ts, cascade.ts) are untouched; this file runs both modes with the agent
@@ -15,7 +16,7 @@
 
 import { CELLS, CENTER, COLUMNS, LINES, coord, index, other, type Cell, type Line, type Player } from './geometry.ts';
 import { IllegalMove, type GameEvent, type IllegalReason } from './events.ts';
-import { MAX_MARKS, DRAW_TURNS, type RotatingMove, type RotatingState, newRotating } from './rotating.ts';
+import { MAX_MARKS, type RotatingMove, type RotatingState, newRotating } from './rotating.ts';
 import { TARGET, landing, type CascadeMove, type CascadeState, newCascade } from './cascade.ts';
 import { TWISTS, inverse, permutation, sameTwist, type Twist } from './twist.ts';
 
@@ -64,6 +65,8 @@ export interface ModeTuning {
   chromeMarks: number;
   /** Cascade: points multiplier for a line with a chrome cube in it. */
   chromeScore: number;
+  /** Twist: a round with no winner after this many turns (both players) is a draw. */
+  drawTurns: number;
 }
 
 const base = (cd: number): Record<PowerId, number> => ({
@@ -83,13 +86,13 @@ const base = (cd: number): Record<PowerId, number> => ({
 export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
   rotating: {
     cooldown: {
-      doubleTap: 8, shove: 8, overspray: 8,
-      tape: 2, fixative: 1, wetFloor: 2,
-      spin: 10, swap: 10, trap: 9,
-      afterimage: 6, delay: 4, reverb: 7,
+      doubleTap: 9, shove: 9, overspray: 9,
+      tape: 2, fixative: 1, wetFloor: 3,
+      spin: 8, swap: 8, trap: 9,
+      afterimage: 6, delay: 4, reverb: 5,
     },
     firstReady: { ...base(0), doubleTap: 1, shove: 1, overspray: 1, spin: 3, swap: 5 },
-    ultCost: { chrome: 10, lockdown: 3, flip: 36, rewind: 24 },
+    ultCost: { chrome: 10, lockdown: 6, flip: 12, rewind: 10 },
     ultPerTurn: 1,
     ultBonus: 2,
     dryTurns: 2,
@@ -100,6 +103,8 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
     lockdownTurns: 3,
     chromeMarks: 2,
     chromeScore: 2,
+    // Longer than Classic's 40: wet paint makes lines wait, so rounds run longer.
+    drawTurns: 50,
   },
   cascade: {
     cooldown: {
@@ -109,7 +114,7 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
       afterimage: 12, delay: 12, reverb: 12,
     },
     firstReady: { ...base(0), doubleTap: 14, overspray: 12, shove: 10, spin: 6, afterimage: 11, delay: 11, reverb: 11 },
-    ultCost: { chrome: 50, lockdown: 9, flip: 7, rewind: 50 },
+    ultCost: { chrome: 50, lockdown: 9, flip: 7, rewind: 30 },
     ultPerTurn: 1,
     ultBonus: 2,
     dryTurns: 2,
@@ -120,6 +125,7 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
     lockdownTurns: 2,
     chromeMarks: 1,
     chromeScore: 2,
+    drawTurns: 120,
   },
 };
 
@@ -207,6 +213,12 @@ export function resetAgentsForRound(a: AgentsState, round: AgentRound): AgentsSt
 
 /** Powers that also make the same turn's move wet (they could otherwise open a line for it). */
 export const WETS_MOVE: ReadonlySet<AbilityId> = new Set<AbilityId>(['shove', 'overspray', 'spin', 'fixative']);
+/**
+ * Whether `id` makes the same turn's move wet in this mode. In Twist the Rewind and Flip
+ * ultimates do too (a Twist line wins the round on the spot). In Cascade a wet drop only
+ * delays its burst, which can make a bigger chain, so there they stay as they are.
+ */
+export const wetsMove = (id: AbilityId, mode: AgentMode): boolean => WETS_MOVE.has(id) || ((id === 'flip' || id === 'rewind') && mode === 'rotating');
 
 export const tuning = (mode: AgentMode): ModeTuning => AGENT_TUNING[mode];
 export const ultCostOf = (t: ModeTuning, agent: AgentId): number => t.ultCost[AGENTS[agent].ult];
@@ -606,7 +618,7 @@ export function applyAgentMove(r: AgentRound, a: AgentsState, move: AgentMove): 
   let mark = -1;
   // After a power that moves, wipes or seals paint, your move's paint is wet too: the
   // power can't open a line for a same-turn win.
-  const wetMove = !!w.a.used && WETS_MOVE.has(w.a.used);
+  const wetMove = !!w.a.used && wetsMove(w.a.used, w.r.mode);
   if (move.kind === 'pass') {
     w.r.turns++;
     w.ev.push({ type: 'passed', player: p });
@@ -626,7 +638,7 @@ export function applyAgentMove(r: AgentRound, a: AgentsState, move: AgentMove): 
     if (move.kind !== 'twist') rr.lastTwist = null;
     if (w.a.reverb) reverb(w, p, mark >= 0 ? mark : (rr.marks[p].at(-1) ?? -1));
     checkWin(w, p);
-    if (!rr.result && rr.turns >= DRAW_TURNS) {
+    if (!rr.result && rr.turns >= w.t.drawTurns) {
       rr.result = { winner: null };
       w.ev.push({ type: 'roundOver', winner: null });
     }
@@ -918,8 +930,9 @@ export function applyAbility(r: AgentRound, a: AgentsState, u: AbilityUse): { ro
       break;
     case 'flip':
       if (rot) {
-        // Two twists at once, ignoring the twist rules; not wet.
-        for (const tw of twists) doTwist(w, tw, p, false);
+        // Two twists at once, ignoring the twist rules. Everything it moves is wet (and
+        // so is this turn's move), so a Flip line has to survive a reply, like Spin's.
+        for (const tw of twists) doTwist(w, tw, p, true);
         checkWin(w, p);
       } else {
         const perm = Array.from({ length: CELLS }, (_, c) => {

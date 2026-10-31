@@ -32,11 +32,11 @@ export const ABILITY_TEXT: Record<AbilityId, AbilityText> = {
   spin: { name: 'Spin', short: 'An extra twist', rotating: 'Twist a layer before your move, even if you twisted last turn. Moved marks are wet, and so is your move.', cascade: 'Twist a layer of the stack, then everything falls (all wet). Your drop is wet.' },
   swap: { name: 'Swap', short: 'Trade places', rotating: 'Swap one of your marks with a touching enemy mark. Both are wet.', cascade: 'Swap one of your cubes with a touching enemy cube. Both are wet.' },
   trap: { name: 'Paint Trap', short: 'Mark a trap', rotating: 'Mark an empty cell. If your opponent paints it, the mark turns into yours.', cascade: 'Mark an empty cell. If your opponent’s paint lands there, it turns into yours.' },
-  flip: { name: 'Flip', short: 'Two twists at once', rotating: 'ULTIMATE. Twist any two layers at once, ignoring the twist rules. Not wet: it can win on the spot.', cascade: 'ULTIMATE. The cube flips upside down; everything falls to the new floor and every line scores, chaining as usual.' },
+  flip: { name: 'Flip', short: 'Two twists at once', rotating: 'ULTIMATE. Twist any two layers at once, ignoring the twist rules. What it moves is wet, and so is your move.', cascade: 'ULTIMATE. The cube flips upside down; everything falls to the new floor and every line scores, chaining as usual.' },
   afterimage: { name: 'Afterimage', short: 'Bring a mark back', rotating: 'Bring back your most recently lost mark to its old cell, if it’s empty (wet).', cascade: 'Bring back your most recently lost cube: it drops into its old column (wet).' },
   delay: { name: 'Delay', short: 'Their next mark is wet', rotating: 'Your opponent’s next mark is wet: it can’t complete a line straight away.', cascade: 'Your opponent’s next cube is wet: its lines wait to burst.' },
   reverb: { name: 'Reverb', short: 'Mirror your move', rotating: 'After your move, paint the cell straight through the Core from your mark (wet).', cascade: 'After your drop, a second cube drops into the mirrored column (wet).' },
-  rewind: { name: 'Rewind', short: 'Undo their turn', rotating: 'ULTIMATE. Undo your opponent’s whole last turn (move and power), then take your turn.', cascade: 'ULTIMATE. Undo your opponent’s whole last turn, scoring and all, then take your turn.' },
+  rewind: { name: 'Rewind', short: 'Undo their turn', rotating: 'ULTIMATE. Undo your opponent’s whole last turn (move and power), then take your turn. Your move after it is wet.', cascade: 'ULTIMATE. Undo your opponent’s whole last turn, scoring and all, then take your turn.' },
 };
 
 export const abilityText = (id: AbilityId, mode: Mode): string => ABILITY_TEXT[id][mode];

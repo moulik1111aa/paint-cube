@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { CELLS, LINES, type Cell, type Player } from '../src/core/geometry.ts';
 import { applyMove, checkMove, newMatch, nextRound, legalMoves, type MatchState, type Move } from '../src/core/match.ts';
 import {
-  AGENTS, AGENT_IDS, AGENT_TUNING, WETS_MOVE, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
+  AGENTS, AGENT_IDS, AGENT_TUNING, WETS_MOVE, wetsMove, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
   type AbilityId, type AbilityUse, type AgentId, type PowerId,
 } from '../src/core/agents.ts';
 import { TWISTS, inverse, permutation, type Twist } from '../src/core/twist.ts';
@@ -341,17 +341,23 @@ test('Paint Trap: when the opponent paints it, the mark becomes the trapper (wet
   assert.ok(m.agents!.wet[5] > 0);
 });
 
-test('Flip (Twist): two twists at once, ignoring the twist rules; not wet, so it can win at once', () => {
-  // Drift holds 0 and 1; 20 sits in the top layer. Find a pair of twists that lines them up.
-  let m = ult(rot(['drift', 'echo'], [[0, 1, 20], [9]]), 0);
+test('Flip (Twist): two twists at once, ignoring the twist rules; what it moves is wet, so it never wins at once', () => {
+  // Drift holds 0 and 1; 20 sits in the top layer. Pairs of twists that line them up
+  // make a wet line: it does not count straight away.
+  const m = ult(rot(['drift', 'echo'], [[0, 1, 20], [9]]), 0);
   (m.round as RotatingState).twistedLast[0] = true;
-  const wins = abilityUses(m.round, m.agents!, 'flip').filter((u) => {
+  const uses = abilityUses(m.round, m.agents!, 'flip');
+  assert.ok(uses.length > 0);
+  let lined = 0;
+  for (const u of uses) {
     const out = applyMove(m, u).state;
-    return out.round.result?.winner === 0;
-  });
-  assert.ok(wins.length > 0);
-  m = applyMove(m, wins[0]).state;
-  assert.equal(m.round.result?.winner, 0);
+    assert.equal(out.round.result, null, 'Flip alone never ends the round');
+    const mine = out.round.cells.flatMap((c, i) => (c === 0 ? [i] : []));
+    if (LINES.some((l) => l.every((c) => mine.includes(c)))) lined++;
+    for (const c of mine) if (out.round.cells[c] !== m.round.cells[c]) assert.ok(out.agents!.wet[c] > 0, 'moved paint is wet');
+  }
+  assert.ok(lined > 0, 'some Flip lines the three up (wet)');
+  assert.ok(wetsMove('flip', 'rotating') && !wetsMove('flip', 'cascade'));
 });
 
 test('Flip (Cascade): the cube flips, everything falls, and lines chain and score as usual', () => {
@@ -408,8 +414,11 @@ test('Rewind undoes the opponent whole turn, power included, then you move', () 
   assert.equal(m.round.turn, 0, 'still my turn');
   assert.equal(m.agents!.cd[1][2], 0, 'their Overspray is back');
   assert.equal(checkMove(m, use('rewind')), 'power-used');
+  // The move after a Rewind is wet: the row is made but does not count yet.
   m = play(m, place(2));
-  assert.equal(m.round.result?.winner, 0);
+  assert.equal(m.round.result, null);
+  assert.ok(m.agents!.wet[2] > 0);
+  assert.ok(wetsMove('rewind', 'rotating') && !wetsMove('rewind', 'cascade'));
 });
 
 test('Cascade: with no legal drop the only move is a pass', () => {

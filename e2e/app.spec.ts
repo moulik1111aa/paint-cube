@@ -257,15 +257,22 @@ test('agents: toggle on, both players lock in, a targeted power, cooldown, the u
   // (A cooldown counts the turns it stays out: 2 now, 1 next turn, then ready.)
   await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveText('2');
   await expect(page.locator('.ab[data-ab="tape"]')).toHaveClass(/off/);
-  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('1/3');
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('1/6');
   await tap(page, 20);
   await tap(page, 11);
   await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveText('1');
-  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('2/3');
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('2/6');
   await tap(page, 24);
   await tap(page, 15);
   await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveCount(0);
   await expect(page.locator('.ab[data-ab="tape"]')).not.toHaveClass(/off/);
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('3/6');
+  await tap(page, 26);
+  await tap(page, 17);
+  await tap(page, 2);
+  await tap(page, 7);
+  await tap(page, 20);
+  await tap(page, 11);
   await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('READY');
 
   // Fire the ultimate: confirm, splash, and Riya is locked down.
@@ -286,5 +293,93 @@ test('agents: toggle on, both players lock in, a targeted power, cooldown, the u
   await page.click('[data-go="resume"]');
   await expect(page.locator('.tagbox.p1 .agent')).toContainText('STENCIL');
   await expect(page.locator('.abilities')).toHaveClass(/p2/);
+  expect(errors).toEqual([]);
+});
+
+test('vs PC: the PC answers every move, in Classic and with agents, and the match resumes against it', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="pc"]');
+  await expect(page.locator('.tag')).toHaveText('Vs PC');
+  await page.click('[data-level="easy"]');
+  await expect(page.locator('[data-level="easy"]')).toHaveClass(/on/);
+  await page.click('[data-mode="rotating"]');
+  await page.click('[data-go="start"]');
+  await expect(page.locator('.tagbox.p2 b')).toHaveText('PC');
+
+  const painted = () => page.evaluate(() => window.__game!.state()!.round.cells.filter((c) => c !== null).length);
+  await tap(page, 0);
+  await settle(page);
+  expect(await painted()).toBe(2);
+  await expect(page.locator('.tagbox.p1')).toHaveClass(/active/);
+  // It's not the player's turn while the PC moves, and the PC's mark is player 2's.
+  expect(await page.evaluate(() => window.__game!.state()!.round.cells.filter((c) => c === 1).length)).toBe(1);
+
+  // Leave and resume: still against the PC.
+  await page.click('.back');
+  await expect(page.locator('[data-go="resume"]')).toContainText('vs PC (easy)');
+  await page.click('[data-go="resume"]');
+  await tap(page, 2);
+  await settle(page);
+  expect(await painted()).toBe(4);
+
+  // Agents vs PC: pick a writer, the PC picks its own, and it plays its turns.
+  await page.click('.back');
+  await page.click('[data-go="pc"]');
+  await page.click('[data-agents]');
+  await page.click('[data-go="start"]');
+  await page.click('[data-go="lock"]');
+  await expect(page.locator('.splash')).toContainText('PC PICKS');
+  await expect(page.locator('.abilities .ab')).toHaveCount(4);
+  expect(await page.evaluate(() => !!window.__game!.state()!.agents)).toBe(true);
+  await tap(page, 0);
+  await settle(page);
+  await expect(page.locator('.tagbox.p1')).toHaveClass(/active/);
+  expect(await page.evaluate(() => window.__game!.state()!.round.turns)).toBe(2);
+  expect(errors).toEqual([]);
+});
+
+test('trial: try a writer against an easy PC with every power ready each turn; wet rows say when they count', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="trial"]');
+  await expect(page.locator('.tag')).toHaveText('Trial mode');
+  await page.click('[data-mode="rotating"]');
+  await page.click('[data-go="start"]');
+  await page.click('[data-go="lock"]'); // BLITZ
+  await expect(page.locator('.turn')).toContainText('Trial');
+  // Double Tap is ready on turn one (normally it unlocks later), and so is the ultimate.
+  await expect(page.locator('.ab[data-ab="doubleTap"]')).not.toHaveClass(/off/);
+  await expect(page.locator('.ab[data-ab="chrome"] em')).toHaveText('READY');
+  await page.click('.ab[data-ab="doubleTap"]');
+  await tap(page, 1);
+  await tap(page, 2);
+  await settle(page);
+  // After the PC's turn, Double Tap is ready again.
+  await expect(page.locator('.tagbox.p1')).toHaveClass(/active/);
+  await expect(page.locator('.ab[data-ab="doubleTap"] .cd')).toHaveCount(0);
+  await expect(page.locator('.ab[data-ab="doubleTap"]')).not.toHaveClass(/off/);
+  // Finish the top-back row with a wet mark if it's open: the note says when it counts.
+  if (await page.evaluate(() => window.__game!.state()!.round.cells[0] === null)) {
+    await page.click('.ab[data-ab="doubleTap"]');
+    await tap(page, 0);
+    await expect(page.locator('.wetnote')).toContainText('is wet');
+    await expect(page.locator('.wetnote')).toContainText('turn after next');
+  }
+  // Trial matches aren't saved.
+  await page.click('.back');
+  await expect(page.locator('[data-go="resume"]')).toHaveCount(0);
   expect(errors).toEqual([]);
 });

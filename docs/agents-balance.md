@@ -29,7 +29,31 @@ ultimate when it makes or blocks a threat (or 15% of the time anyway).
   winner's turn, the winner's previous turn);
 - every agent beats the no-powers bot, but not overwhelmingly: 50-80% of matches.
 
-## Final numbers
+## Build 20: cheaper ultimates that can't win on the spot
+
+Rewind (24 pips) and Flip (36) were only ready about once a match in Twist: at 7 pips
+they decided too many rounds by themselves (undo the block, or line three up, and win
+the same turn, since ultimates weren't wet). Instead of pricing them out, the rule
+changed: **in Twist, the move after a Rewind or a Flip is wet, and so is everything a
+Flip moves.** Then they could be cheap again: Rewind 10, Flip 12 (about once a round).
+
+Wet lines make Twist rounds longer, so draws rose to 21% with the old 40-turn limit;
+Agents rounds now draw at **50 turns** (`drawTurns`; Classic stays at 40). Other
+retuning: Blitz powers cooldown 9, Stencil Wet Floor 3 and Lockdown 6, Drift Spin and
+Swap 8, Echo Reverb 5.
+
+In Cascade the wet move made Echo stronger, not weaker (a delayed burst can chain
+bigger), so Cascade's Rewind stays instant; its cost dropped from 50 to 30.
+
+```
+== TWIST ==  rounds 5919, first player 48.9% of decisive, draws 14.0%, median 23 turns
+blitz 55.6%  stencil 58.7%  drift 41.3%  echo 44.4%   (vs no-powers 55-77%)
+Rewind used in 76% of Echo's rounds, Flip in 79% of Drift's.  all balance checks pass
+== CASCADE ==  first player 54.6%, median 29 turns
+blitz ~54%  stencil ~49%  drift ~45%  echo 58.6% (vs no-powers 78.7%)  all balance checks pass
+```
+
+## Final numbers (build 18)
 
 ```
 == TWIST ==  rounds 5984, first player 51.1% of decisive, draws 13.5%, median 19 turns
@@ -72,14 +96,15 @@ the ultimate meter carries over.
 |---|---|---|
 | Wet paint dries after | 2 of its owner's turn starts | 2 |
 | Ultimate meter | +1 per own turn, +2 when you lose a round | +1 per own turn, +2 each time you're scored on |
-| **BLITZ** Double Tap / Shove / Overspray | cooldown 8 / 8 / 8, unlock turn 2 / 2 / 2 | 12 / 12 / 12, unlock turn 15 / 11 / 13 |
+| **BLITZ** Double Tap / Shove / Overspray | cooldown 9 / 9 / 9, unlock turn 2 / 2 / 2 | 12 / 12 / 12, unlock turn 15 / 11 / 13 |
 | Chrome (ult) | 10 pips, next 2 marks | 50 pips, next 1 cube (scores double) |
-| **STENCIL** Tape / Fixative / Wet Floor | 2 / 1 / 2 (tape 4 turns, seal 4, floor 2) | 4 / 4 / 4 (tape 3, seal 3, floor 2) |
-| Lockdown (ult) | 3 pips, 3 turns | 9 pips, 2 turns |
-| **DRIFT** Spin / Swap / Paint Trap | 10 / 10 / 9, unlock turn 4 / 6 / 1 (trap 3 turns) | 12 / 3 / 1, unlock turn 7 / 1 / 1 (trap 6 turns) |
-| Flip (ult) | 36 pips | 7 pips |
-| **ECHO** Afterimage / Delay / Reverb | 6 / 4 / 7 | 12 / 12 / 12, unlock turn 12 / 12 / 12 |
-| Rewind (ult) | 24 pips | 50 pips |
+| **STENCIL** Tape / Fixative / Wet Floor | 2 / 1 / 3 (tape 4 turns, seal 4, floor 2) | 4 / 4 / 4 (tape 3, seal 3, floor 2) |
+| Lockdown (ult) | 6 pips, 3 turns | 9 pips, 2 turns |
+| **DRIFT** Spin / Swap / Paint Trap | 8 / 8 / 9, unlock turn 4 / 6 / 1 (trap 3 turns) | 12 / 3 / 1, unlock turn 7 / 1 / 1 (trap 6 turns) |
+| Flip (ult) | 12 pips (moves wet, move wet) | 7 pips |
+| **ECHO** Afterimage / Delay / Reverb | 6 / 4 / 5 | 12 / 12 / 12, unlock turn 12 / 12 / 12 |
+| Rewind (ult) | 10 pips (move after it wet) | 30 pips |
+| A round is a draw after | 50 turns (Classic: 40) | 120 turns |
 
 In Twist a cooldown of 8-10 means "about once per round" (a round is ~9 turns each). In
 Cascade most powers unlock only in the second half of a round: one extra cube decides a

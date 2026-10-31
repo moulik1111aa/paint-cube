@@ -69,18 +69,21 @@ const TOPICS: Record<Topic, Lesson> = {
     picks: ['blitz', 'stencil'],
     setup: [place(24), place(6)],
     steps: [
-      { say: 'Wet paint. Orange has one mark in the top row.', focus: [24] },
-      { say: 'Orange uses Double Tap. Paint from a power is wet: see it drip.', moves: [use('doubleTap', [25])], focus: [25] },
-      { say: 'Orange finishes the row with the normal move. But a line with wet paint does not count yet.', moves: [place(26)], focus: [24, 25, 26] },
-      { say: 'So Blue gets to answer. Blue twists the left layer, and the row breaks apart. Saved!', moves: [twist(0, 0, 1)] },
+      { say: 'Wet paint is paint that hasn’t dried yet. A row with wet paint in it does not count. Orange has one mark in the top row.', focus: [24] },
+      { say: 'Orange uses Double Tap. Paint put down by a power is wet: see it drip.', moves: [use('doubleTap', [25])], focus: [25] },
+      { say: 'Orange finishes the row with the normal move. The row is complete, but one mark is wet, so it does not count yet.', moves: [place(26)], focus: [24, 25, 26] },
+      { say: 'Wet paint dries at the start of Orange’s turn after next. Until then Blue gets two turns to break the row. Here Blue twists the left layer, and the row breaks apart. Saved!', moves: [twist(0, 0, 1)] },
       {
-        say: 'Again, but this time Blue plays somewhere else.',
+        say: 'What makes paint wet? Paint a power puts down or moves. Your normal move on a turn you used Shove, Overspray, Spin, Fixative, Flip or Rewind. And the other player’s next mark after you use Delay.',
+      },
+      {
+        say: 'Again, but this time Blue ignores the row. That was Blue’s first turn to answer.',
         reset: [place(24), place(6), use('doubleTap', [25]), place(26)],
         moves: [place(0)],
         focus: [24, 25, 26],
       },
-      { say: 'The paint dries at the start of Orange’s turns. Orange plays away from the row, so it stays whole.', moves: [twist(2, 0, 1)] },
-      { say: 'Blue misses the last chance. The paint dries, the row counts, and Orange takes the round.', moves: [place(9)], ends: true },
+      { say: 'Orange’s turn starts: the paint is still wet, one more turn to go. Orange plays away from the row.', moves: [twist(2, 0, 1)] },
+      { say: 'Blue’s second and last chance, and Blue misses it. At the start of Orange’s turn the paint dries, the row is whole, and it counts. Orange takes the round.', moves: [place(9)], ends: true },
     ],
   },
   timers: {
@@ -106,7 +109,7 @@ const TOPICS: Record<Topic, Lesson> = {
     steps: [
       { say: 'The last button is the ultimate. Its ring fills by one every turn, and faster when you lose a round.' },
       { say: 'When the ring is full it says READY. Orange fires Chrome!', moves: [use('chrome')] },
-      { say: 'Ultimates are never wet: they hit straight away. Orange’s next marks are chrome. They never fade, and no power can move or wipe them.', moves: [place(25)], focus: [25] },
+      { say: 'Chrome hits straight away: Orange’s next marks are chrome. They never fade, and no power can move or wipe them.', moves: [place(25)], focus: [25] },
     ],
   },
 };
@@ -211,8 +214,8 @@ const TWIST_POWERS: Record<AbilityId, Omit<Lesson, 'key' | 'title' | 'mode'>> = 
     picks: ['drift', 'stencil'],
     setup: [place(24), place(6), place(16), place(8)],
     steps: [
-      { say: 'Flip is Drift’s ultimate: two twists at once, ignoring the twist rules. It isn’t wet, so it can win on the spot.', moves: [use('flip', undefined, [{ axis: 2, slice: 2, dir: 1 } as Twist, { axis: 0, slice: 0, dir: 1 } as Twist])] },
-      { say: 'Then Orange makes the normal move.', moves: [place(26)] },
+      { say: 'Flip is Drift’s ultimate: two twists at once, ignoring the twist rules. Everything it moves is wet.', moves: [use('flip', undefined, [{ axis: 2, slice: 2, dir: 1 } as Twist, { axis: 0, slice: 0, dir: 1 } as Twist])] },
+      { say: 'Then Orange makes the normal move, wet too: a row it makes has to survive Blue’s reply.', moves: [place(26)] },
     ],
   },
   afterimage: {
@@ -247,7 +250,7 @@ const TWIST_POWERS: Record<AbilityId, Omit<Lesson, 'key' | 'title' | 'mode'>> = 
     steps: [
       { say: 'Blue just blocked Orange’s top row.', focus: [26] },
       { say: 'Rewind is Echo’s ultimate: it undoes Blue’s whole last turn.', moves: [use('rewind')], focus: [26] },
-      { say: 'The gap is open again, and Orange takes the row. Ultimates aren’t wet, so it counts at once.', moves: [place(26)], ends: true },
+      { say: 'The gap is open again, and Orange fills it. The move after a Rewind is wet, so Blue still gets a chance to answer.', moves: [place(26)], focus: [24, 25, 26] },
     ],
   },
 };

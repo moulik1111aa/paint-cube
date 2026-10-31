@@ -308,3 +308,7 @@
 /* Cheap screen effects over the 3D canvas (no full-screen shader passes). */
 .game .stage .vig { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 85% 70% at 50% 45%, transparent 55%, rgba(6, 3, 14, 0.55) 100%); }
 .game .stage .flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; mix-blend-mode: screen; background: radial-gradient(circle at 50% 48%, rgba(255, 236, 200, 0.95), rgba(255, 200, 150, 0.35) 38%, rgba(255, 200, 150, 0) 70%); }
+/* Vs PC difficulty */
+.levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; width: min(380px, 100%); margin: 10px 0 2px; }
+.level { appearance: none; padding: 10px 6px; border: 3px solid #000; border-radius: 12px; background: #d9d4e4; color: #0b0b12; font: 900 15px/1 'Inter Display', system-ui, sans-serif; text-transform: uppercase; box-shadow: 0 3px 0 #000; }
+.level.on { background: var(--p2); transform: translateY(-2px) rotate(-1deg); outline: 3px solid #fff; outline-offset: 1px; }
