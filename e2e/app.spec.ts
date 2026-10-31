@@ -214,9 +214,24 @@ test('agents: toggle on, both players lock in, a targeted power, cooldown, the u
   await expect(page.locator('.agentcard .who b')).toHaveText('BLITZ');
   await page.click('[data-go="lock"]');
 
-  // The agents how-to card comes up once; skip it.
-  await expect(page.locator('.help h2')).toHaveText('Powers');
-  await page.click('.help [data-skip]');
+  // The first agents match opens the show-me tutorial on the cube; close it.
+  await expect(page.locator('.lesson .kicker')).toContainText('Using a power');
+  await expect(page.locator('.lesson .say p')).toContainText('Blitz');
+  await page.click('.lesson [data-close]');
+  await expect(page.locator('.lesson')).toHaveCount(0);
+
+  // The Powers button reviews both writers, with a show-me for each power.
+  await page.click('.powersbtn');
+  await expect(page.locator('.review .rlist li')).toHaveCount(4);
+  await page.click('.review [data-tab="1"]');
+  await expect(page.locator('.review .rlist')).toContainText('Overspray');
+  await page.click('.review [data-show="overspray"]');
+  await expect(page.locator('.lesson .kicker')).toContainText('Overspray');
+  expect(await page.evaluate(() => window.__game!.lesson())).toBe(true);
+  await page.click('.lesson [data-close]');
+  await expect(page.locator('.review')).toBeVisible();
+  await page.click('.review [data-close]');
+  expect(await page.evaluate(() => window.__game!.state()!.round.cells.every((c) => c === null))).toBe(true);
   await expect(page.locator('.abilities .ab')).toHaveCount(4);
   await expect(page.locator('.tagbox.p1 .agent')).toContainText('STENCIL');
   await expect(page.locator('.tagbox.p2 .agent')).toContainText('BLITZ');

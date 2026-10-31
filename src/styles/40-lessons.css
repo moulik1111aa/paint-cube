@@ -47,7 +47,8 @@
   overflow-wrap: anywhere;
 }
 .lesson .say {
-  margin-top: auto;
+  /* Up top, over the wall: the cube stays in full view below it. */
+  margin-top: 10px;
   pointer-events: auto;
   background: #f4f1ea;
   color: #0b0b12;
@@ -59,11 +60,11 @@
   align-self: center;
   box-sizing: border-box;
 }
-.lesson .say p { margin: 6px 0 0; font-weight: 800; font-size: 16px; line-height: 1.35; overflow-wrap: anywhere; }
+.lesson .say p { margin: 6px 0 0; font-weight: 800; font-size: 15px; line-height: 1.32; overflow-wrap: anywhere; }
 .lesson .whoacts { display: inline-block; padding: 3px 9px; border: 2px solid #000; border-radius: 999px; font-weight: 900; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; }
 .lesson .whoacts.p1 { background: var(--p1); }
 .lesson .whoacts.p2 { background: var(--p2); }
-.lesson .pips { display: flex; gap: 6px; margin: 10px 0 8px; }
+.lesson .pips { display: flex; gap: 6px; margin: 8px 0 6px; }
 .lesson .pips i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #000; }
 .lesson .pips i.on { background: #000; }
 .lesson .pips i.done { background: rgba(0, 0, 0, 0.35); }
@@ -71,7 +72,7 @@
 .lesson .link { color: #0b0b12; text-shadow: none; }
 .lesson .btn { min-width: 0; padding: 12px 18px; font-size: 16px; }
 .lesson .btn:disabled { opacity: 0.45; }
-.abilities.demo { margin: 10px auto 0; pointer-events: none; }
+.abilities.demo { margin: auto auto 0; pointer-events: none; }
 .ab.tapme { outline: 3px solid #fff; outline-offset: 2px; transform: translateY(-4px) rotate(-2deg); }
 .ab.tapme::after {
   content: '👆';
