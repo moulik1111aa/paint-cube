@@ -265,6 +265,11 @@ export function startApp(app: HTMLElement): void {
       names = saved.names;
       resumeMatch(saved.match);
     });
+    // Tap the build number: how the 3D is running on this phone (for troubleshooting).
+    ui.querySelector('.build')!.addEventListener('click', () => {
+      const s = board?.stats();
+      toast(s ? `3D: ${s.ratio.toFixed(2)}x sharpness · ${s.fps || '…'} fps · quality ${s.levels - s.level}/${s.levels}` : '3D is still loading');
+    });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
     ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
       prefs = { ...prefs, sound: !prefs.sound };

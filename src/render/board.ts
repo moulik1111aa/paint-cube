@@ -4,8 +4,7 @@
 // Taps on cells are reported back through `onTap`.
 
 import { makeRenderer, RenderLoop, softEnv, disposeAll, type Three } from './three.ts';
-import { Post } from './post.ts';
-import { makeMaterials, roundedBox, crackTexture, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
+import { makeMaterials, roundedBox, crackTexture, glowTexture, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
 import { wallTexture, groundTexture, graffitiCaption, wallTagTexture } from './street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from './fx3d.ts';
 import type { Sfx } from '../audio/sfx.ts';
@@ -57,21 +56,34 @@ export interface Board {
   abilityName: ((id: AbilityId) => string) | null;
   /** Manual clock (tests): advance game time and optionally draw. */
   advance(sec: number, draw?: boolean): void;
+  /** Rendering diagnostics: resolution multiplier, frame rate, quality step (0 = best). */
+  stats(): { ratio: number; fps: number; level: number; levels: number };
   dispose(): void;
 }
 
 export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = false): Board {
   const view = makeRenderer(T, host);
   const r = view.r;
-  r.toneMapping = T.NoToneMapping;
+  // One pass straight to the screen at the phone's full resolution, with the canvas's
+  // own anti-aliasing. (A stack of full-screen filters used to run every frame; phones
+  // couldn't keep up, so the governor lowered the resolution and the cube went blurry.)
+  r.toneMapping = T.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.05;
   r.shadowMap.enabled = true;
   r.shadowMap.type = T.PCFSoftShadowMap;
-  // Sharp on high-density phones (up to 2.5x); the frame-rate governor below trades
-  // this down on slow phones and back up when they recover.
-  const maxRatio = Math.min(2.5, devicePixelRatio || 1);
+  const dpr = devicePixelRatio || 1;
+  const maxRatio = Math.min(3, dpr);
+  /** Never trade the resolution below this: sharpness comes first. */
+  const minRatio = Math.min(dpr, 2);
   let pixelRatio = maxRatio;
   r.setPixelRatio(pixelRatio);
-  const post = new Post(T, r);
+  const aniso = Math.min(8, r.capabilities.getMaxAnisotropy?.() ?? 1);
+  // Vignette and impact flash as cheap overlays above the canvas.
+  const vig = document.createElement('div');
+  vig.className = 'vig';
+  const flashEl = document.createElement('div');
+  flashEl.className = 'flash';
+  r.domElement.after(vig, flashEl);
   const clock = new Clock();
   const tweens = new Tweens();
   const shake = new Shake();
@@ -80,6 +92,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   world.background = new T.Color('#0b0816');
   const env = softEnv(T, r, '#9a8cff', '#0a0912');
   const M: Materials = makeMaterials(T, env);
+  // Sharper textures on faces seen at an angle.
+  for (const m of Object.values(M).flat() as any[]) for (const k of ['map', 'bumpMap', 'roughnessMap']) if (m?.[k]) m[k].anisotropy = aniso;
   const camera = new T.PerspectiveCamera(38, 1, 0.5, 80);
   // Layers: 0 the cube (inked, kept sharp), 1 effects, 2 glass slots, 3 the wall and
   // ground (painted with the oil filter, no ink).
@@ -104,12 +118,15 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   world.add(fill);
 
   const wallTex = wallTexture(T);
+  wallTex.anisotropy = aniso;
+  const groundTex = groundTexture(T);
+  groundTex.anisotropy = aniso;
   const wall = new T.Mesh(new T.PlaneGeometry(12, 18), new T.MeshStandardMaterial({ map: wallTex, roughness: 0.95 }));
   wall.position.set(0, 3, -5);
   wall.receiveShadow = true;
   wall.layers.set(3);
   world.add(wall);
-  const ground = new T.Mesh(new T.PlaneGeometry(40, 30), new T.MeshStandardMaterial({ map: groundTexture(T), roughness: 0.9 }));
+  const ground = new T.Mesh(new T.PlaneGeometry(40, 30), new T.MeshStandardMaterial({ map: groundTex, roughness: 0.9 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(0, -2.6, 10);
   ground.receiveShadow = true;
@@ -135,18 +152,35 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const casingGeo = roundedBox(T, CELL, 0.14, 4);
   const glass = new T.MeshStandardMaterial({ color: '#cfc8ff', transparent: true, opacity: 0.13, roughness: 0.2, depthWrite: false });
   const casings: any[] = [];
+  const noRay = () => {};
   for (let i = 0; i < CELLS; i++) {
     const m = new T.Mesh(casingGeo, M.casing);
     m.castShadow = true;
     m.receiveShadow = true;
     m.position.copy(slot(i));
     m.userData.cell = i;
+    // Ink outline: a slightly bigger back-facing shell, drawn crisp by the rasterizer.
+    const hull = new T.Mesh(casingGeo, M.ink);
+    hull.scale.setScalar(1.075);
+    hull.raycast = noRay;
+    hull.userData.hull = true;
+    m.add(hull);
     cube.add(m);
     casings.push(m);
   }
   const core = new T.Mesh(new T.IcosahedronGeometry(0.27, 1), M.core);
   core.castShadow = true;
   cube.add(core);
+  const coreInk = new T.Mesh(core.geometry, M.ink);
+  coreInk.scale.setScalar(1.12);
+  coreInk.raycast = noRay;
+  core.add(coreInk);
+  // The Core's glow (it used to come from a full-screen bloom filter).
+  const glowMat = new T.SpriteMaterial({ map: glowTexture(T), color: CORE_COLOR, transparent: true, opacity: 0.85, depthWrite: false, blending: T.AdditiveBlending });
+  const coreGlow = new T.Sprite(glowMat);
+  coreGlow.scale.setScalar(1.25);
+  coreGlow.layers.set(1);
+  core.add(coreGlow);
   const coreLight = new T.PointLight(CORE_COLOR, 7, 3.2, 1.6);
   cube.add(coreLight);
 
@@ -175,6 +209,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     body.userData.body = true;
     const hull = new T.Mesh(shellGeo, M.ink);
     hull.scale.setScalar(1.1);
+    hull.raycast = noRay;
     inner.add(hull, body);
     let s = seed * 7919 + 13;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -1152,8 +1187,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       const c = casings[i];
       c.material = stacking ? glass : M.casing;
       c.castShadow = !stacking;
-      // Glass slots stay out of the outline pass so only the paint gets inked.
-      c.layers.set(stacking ? 2 : 0);
+      // Glass slots get no ink outline, so only the paint is inked.
+      for (const h of c.children) if (h.userData.hull) h.visible = !stacking;
       c.visible = !(i === CENTER && !stacking);
     }
     core.visible = !stacking;
@@ -1322,7 +1357,6 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   host.addEventListener('pointercancel', onCancel);
 
   let shakeOff: [number, number, number] = [0, 0, 0];
-  const size = new T.Vector2();
   function update(real: number): void {
     const dt = clock.advance(real);
     tweens.update(dt);
@@ -1348,6 +1382,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     M.core.emissive.lerp(coreTarget, kc);
     M.core.color.lerp(coreTarget, kc);
     coreLight.color.lerp(coreTarget, kc);
+    glowMat.color.lerp(coreTarget, kc);
     M.core.emissiveIntensity = 2.2 + beat * 0.5;
     coreLight.intensity = 6 + beat * 1.5;
     for (let i = 0; i < CELLS; i++) {
@@ -1388,13 +1423,11 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     wall.scale.x = wallW / 12;
     wallTex.repeat.x = wallW / 12;
     wallTex.offset.x = -(wallW / 12 - 1) / 2;
-    r.getDrawingBufferSize(size);
-    post.setSize(size.x, size.y);
-    post.lineScale = 1.3 * Math.max(1, pixelRatio / 2);
-    post.strength = 0.55 + pulse.bloom;
-    post.aberration = pulse.aberr;
-    post.flash = pulse.flash;
-    post.render(world, camera, now);
+    glowMat.opacity = Math.min(1, 0.7 + pulse.bloom * 0.6);
+    const f = Math.min(1, pulse.flash * 1.4);
+    if (f > 0.01 || flashEl.style.opacity !== '0') flashEl.style.opacity = f > 0.01 ? f.toFixed(3) : '0';
+    r.setRenderTarget(null);
+    r.render(world, camera);
   }
 
   let last = 0;
@@ -1403,36 +1436,40 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   let slowFor = 0;
   let fastFor = 0;
   let warmup = 3;
-  /** Quality steps, best first; the governor moves along this list. */
-  const steps: (() => void)[] = [];
-  for (let pr = maxRatio; pr > 1.001; pr = Math.max(1, pr - 0.25)) {
-    const v = pr;
-    steps.push(() => {
-      pixelRatio = v;
-      r.setPixelRatio(v);
-      post.painterly = 0.3;
-      fx.budget = 1;
-    });
-  }
-  steps.push(() => {
-    pixelRatio = 1;
-    r.setPixelRatio(1);
-    post.painterly = 0.3;
-    fx.budget = 1;
-  });
-  steps.push(() => {
-    pixelRatio = 1;
-    r.setPixelRatio(1);
-    post.painterly = 0;
-    fx.budget = 1;
-  });
-  steps.push(() => {
-    pixelRatio = 1;
-    r.setPixelRatio(1);
-    post.painterly = 0;
-    fx.budget = 0.5;
-  });
+  /**
+   * Quality steps, best first; the governor moves along this list. Effects go first
+   * (soft shadows, particles, shadows), and the resolution only after them, never below
+   * `minRatio` (2x on most phones): a sharp cube matters more than extras.
+   */
+  const shadowSoft = (soft: boolean, size: number) => {
+    const t = soft ? T.PCFSoftShadowMap : T.PCFShadowMap;
+    if (r.shadowMap.type !== t || lamp.shadow.mapSize.x !== size) {
+      r.shadowMap.type = t;
+      lamp.shadow.mapSize.set(size, size);
+      lamp.shadow.map?.dispose();
+      lamp.shadow.map = null;
+      world.traverse((o: any) => o.material && (o.material.needsUpdate = true));
+    }
+  };
+  const quality = (pr: number, soft: boolean, shadowSize: number, budget: number, shadows = true) => () => {
+    if (pixelRatio !== pr) {
+      pixelRatio = pr;
+      r.setPixelRatio(pr);
+    }
+    shadowSoft(soft, shadowSize);
+    r.shadowMap.enabled = shadows;
+    fx.budget = budget;
+  };
+  const steps: (() => void)[] = [
+    quality(maxRatio, true, 1024, 1),
+    quality(maxRatio, false, 1024, 1),
+    quality(maxRatio, false, 512, 0.6),
+  ];
+  for (let pr = maxRatio - 0.25; pr > minRatio + 0.001; pr -= 0.25) steps.push(quality(pr, false, 512, 0.6));
+  steps.push(quality(minRatio, false, 512, 0.5));
+  steps.push(quality(minRatio, false, 512, 0.4, false));
   let level = 0;
+  const stats = { fps: 0 };
   /** The best step we may climb back to: a level that was too slow twice is off limits. */
   let ceiling = 0;
   const fails = steps.map(() => 0);
@@ -1455,9 +1492,9 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
         fpsT += real;
         if (fpsT >= 0.5) {
           const fps = frames / fpsT;
-          // Slow phone: trade resolution, then the oil-paint filter, then particles, for
-          // frame rate. A steady fast phone climbs back up, but not to a level that was
-          // too slow twice.
+          // Slow phone: trade extras, then a little resolution, for frame rate. A steady
+          // fast phone climbs back up, but not to a level that was too slow twice.
+          stats.fps = Math.round(fps);
           slowFor = fps < 40 ? slowFor + fpsT : 0;
           fastFor = fps > 55 ? fastFor + fpsT : 0;
           if (slowFor > 2 && level < steps.length - 1) {
@@ -1482,6 +1519,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   document.addEventListener('visibilitychange', onVisible);
 
   const board: Board = {
+    stats: () => ({ ratio: pixelRatio, fps: stats.fps, level, levels: steps.length }),
     onTap: null,
     onTwistIntent: null,
     onTwistReady: null,
@@ -1541,7 +1579,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       host.removeEventListener('pointercancel', onCancel);
       tweens.clear();
       fx.clear();
-      post.dispose();
+      glowMat.map.dispose();
+      glowMat.dispose();
+      vig.remove();
+      flashEl.remove();
       disposeAll(world);
       r.dispose();
       r.domElement.remove();
