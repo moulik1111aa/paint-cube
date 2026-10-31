@@ -94,7 +94,11 @@ export function build() {
     .sort()
     .map((f) => readFileSync(join(src, 'styles', f), 'utf8'))
     .join('\n');
-  const buildInfo = { version: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version, builtAt: new Date().toISOString() };
+  const buildInfo = {
+    version: JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version,
+    build: process.env.GITHUB_RUN_NUMBER ?? 'dev',
+    builtAt: new Date().toISOString(),
+  };
   const js = `window.__BUILD__=${JSON.stringify(buildInfo)};\n` + bundle(join(src, 'main.ts'));
   const html = readFileSync(join(src, 'index.html'), 'utf8')
     .replace('/*__FONTS__*/', () => fonts())

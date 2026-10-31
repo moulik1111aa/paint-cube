@@ -14,38 +14,3 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); overscroll-behavior: none; }
 body { -webkit-tap-highlight-color: transparent; user-select: none; }
 #app { position: fixed; inset: 0; }
-
-.title-screen {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  grid-template-rows: 1fr auto auto;
-  padding: calc(env(safe-area-inset-top) + 24px) 24px calc(env(safe-area-inset-bottom) + 32px);
-}
-.title-screen .stage { position: relative; min-height: 0; }
-.title-screen .gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-.title-screen h1 {
-  margin: 0;
-  text-align: center;
-  font-weight: 900;
-  font-size: clamp(44px, 14vw, 72px);
-  letter-spacing: -0.02em;
-  line-height: 0.95;
-}
-.title-screen h1 .p1 { color: var(--p1); }
-.title-screen h1 .p2 { color: var(--p2); }
-.title-screen .note {
-  margin: 16px 0 0;
-  text-align: center;
-  color: var(--ink-quiet);
-  font-weight: 700;
-  font-size: 14px;
-}
-.title-screen .no3d {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  color: var(--ink-quiet);
-  font-weight: 700;
-}

@@ -1,6 +1,6 @@
-// Paint Cube entry point.
+// Paint Cube entry point. For now the app opens on the look test.
 
-import { showTitle } from './ui/title.ts';
+import { showLookTest } from './ui/looktest.ts';
 
 const app = document.getElementById('app');
-if (app) showTitle(app);
+if (app) showLookTest(app);

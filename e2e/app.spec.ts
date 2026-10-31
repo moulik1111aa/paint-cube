@@ -1,15 +1,19 @@
 // End-to-end: the real page in Chromium at phone size.
 import { test, expect } from 'playwright/test';
 
-test('title screen loads with the 3D cube and no errors', async ({ page }) => {
+test('look test loads the 3D scene and every effect runs without errors', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 
-  await page.goto('/');
-  await expect(page.locator('.title-screen h1')).toHaveText('Paint Cube');
-  await expect(page.locator('.title-screen')).toHaveAttribute('data-three-d', /^(ok|off)$/, { timeout: 15_000 });
-  expect(await page.locator('.title-screen').getAttribute('data-three-d')).toBe('ok');
-  await expect(page.locator('.title-screen .gl')).toBeVisible();
+  await page.goto('/?manual');
+  await expect(page.locator('.look h1')).toHaveText('Paint Cube');
+  await expect(page.locator('.look')).toHaveAttribute('data-three-d', 'ok', { timeout: 15_000 });
+  await expect(page.locator('.look .gl')).toBeVisible();
+  for (const act of ['splat', 'splat', 'twist', 'line', 'fade', 'win', 'reset']) {
+    await page.evaluate((a) => void window.__look!.act(a), act);
+    for (let i = 0; i < 120; i++) await page.evaluate(() => window.__look!.advance(1 / 30, false));
+  }
+  await page.evaluate(() => window.__look!.advance(1 / 60, true));
   expect(errors).toEqual([]);
 });
