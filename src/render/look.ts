@@ -111,7 +111,7 @@ export function splatTexture(T: Three, seed: number, size = 256): any {
  * top to the base colour, spray grain, a darker overspray rim, and the classic white
  * graffiti shine (two diagonal strokes and a sparkle) in the top-left corner.
  */
-export function sprayFillTexture(T: Three, base: string, light: string, seed: number, size = 256): any {
+export function sprayFillTexture(T: Three, base: string, light: string, seed: number, size = 512): any {
   const [c, g] = canvas(size, size);
   const r = rand(seed + 5);
   const gr = g.createLinearGradient(0, 0, size * 0.3, size);
@@ -121,9 +121,10 @@ export function sprayFillTexture(T: Three, base: string, light: string, seed: nu
   g.fillStyle = gr;
   g.fillRect(0, 0, size, size);
   // Grain: light and dark specks, like a can sprayed from a distance.
-  for (let i = 0; i < 2600; i++) {
+  const k = size / 256;
+  for (let i = 0; i < 2600 * k * k; i++) {
     g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.18})` : `rgba(0,0,0,${r() * 0.16})`;
-    const s = 0.8 + r() * 2.2;
+    const s = (0.8 + r() * 2.2) * k * 0.75;
     g.fillRect(r() * size, r() * size, s, s);
   }
   // Overspray rim: a soft dark band at the edges.
@@ -158,22 +159,25 @@ export function sprayFillTexture(T: Three, base: string, light: string, seed: nu
   g.fill();
   const t = new T.CanvasTexture(c);
   t.colorSpace = T.SRGBColorSpace;
+  t.anisotropy = 8;
   return t;
 }
 
 /** Subtle concrete grain for the blank blocks (the "wall" the paint goes on). */
-export function concreteTexture(T: Three, size = 256): any {
+export function concreteTexture(T: Three, size = 512): any {
   const [c, g] = canvas(size, size);
   const r = rand(77);
+  const k = size / 256;
   g.fillStyle = '#b4afc4';
   g.fillRect(0, 0, size, size);
-  for (let i = 0; i < 3000; i++) {
+  for (let i = 0; i < 3000 * k * k; i++) {
     g.fillStyle = r() < 0.5 ? `rgba(0,0,0,${r() * 0.1})` : `rgba(255,255,255,${r() * 0.12})`;
-    const s = 0.7 + r() * 2.5;
+    const s = (0.7 + r() * 2.5) * k * 0.75;
     g.fillRect(r() * size, r() * size, s, s);
   }
   const t = new T.CanvasTexture(c);
   t.colorSpace = T.SRGBColorSpace;
+  t.anisotropy = 8;
   return t;
 }
 

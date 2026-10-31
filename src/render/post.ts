@@ -1,6 +1,8 @@
 // Post-processing for the street-art look. The scene renders into an HDR target; a
-// normals + depth pass of the solid objects (layer 0) gives the ink outlines; a
-// Kuwahara filter turns the image into flat brushy patches of paint; a mip-chain bloom
+// full-resolution normals + depth pass of the cube (layer 0) gives the ink outlines and,
+// in its alpha, a mask of where the cube is; a Kuwahara filter turns the wall and ground
+// (never the cube) into flat brushy patches of paint; a light contrast-adaptive sharpen
+// keeps the cube's edges and shine crisp; a mip-chain bloom
 // picks out what is brighter than white; and the final pass mixes it all with ACES
 // tone mapping, halftone dots in the shadows, paper grain, vignette and two impact
 // controls (chromatic aberration and a warm flash). Hand-written on three.js core, so
@@ -67,6 +69,7 @@ uniform sampler2D b0; uniform sampler2D b1; uniform sampler2D b2; uniform sample
 uniform float strength; uniform float aberration; uniform float flash; uniform float exposure;
 uniform float vignette; uniform float time; uniform vec2 res; uniform float painterly;
 uniform float ink; uniform float halftone; uniform float near; uniform float far;
+uniform float sharpen; uniform float lineScale;
 varying vec2 vUv;
 vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -80,12 +83,29 @@ float viewZ(vec2 uv){
 }
 void main(){
   vec2 d = vUv - 0.5;
+  // The cube (and its glass slots) wrote alpha 1 into the normals pass: keep it sharp.
+  float cube = ink > 0.0 ? texture2D(normals, vUv).a : 0.0;
+  float paintAmt = painterly * (1.0 - cube);
   vec3 col;
   if (aberration > 0.0001) {
-    col.r = mix(texture2D(scene, vUv + d * aberration).r, texture2D(paint, vUv + d * aberration).r, painterly);
-    col.g = mix(texture2D(scene, vUv).g, texture2D(paint, vUv).g, painterly);
-    col.b = mix(texture2D(scene, vUv - d * aberration).b, texture2D(paint, vUv - d * aberration).b, painterly);
-  } else col = mix(texture2D(scene, vUv).rgb, texture2D(paint, vUv).rgb, painterly);
+    col.r = mix(texture2D(scene, vUv + d * aberration).r, texture2D(paint, vUv + d * aberration).r, paintAmt);
+    col.g = mix(texture2D(scene, vUv).g, texture2D(paint, vUv).g, paintAmt);
+    col.b = mix(texture2D(scene, vUv - d * aberration).b, texture2D(paint, vUv - d * aberration).b, paintAmt);
+  } else {
+    // Contrast-adaptive sharpen: push away from the neighbour average, clamped to the
+    // neighbourhood's range so it never rings.
+    vec3 c0 = texture2D(scene, vUv).rgb;
+    vec2 t = 1.0 / res;
+    vec3 a = texture2D(scene, vUv + vec2(t.x, 0.0)).rgb;
+    vec3 b = texture2D(scene, vUv - vec2(t.x, 0.0)).rgb;
+    vec3 c = texture2D(scene, vUv + vec2(0.0, t.y)).rgb;
+    vec3 e = texture2D(scene, vUv - vec2(0.0, t.y)).rgb;
+    vec3 mn = min(c0, min(min(a, b), min(c, e)));
+    vec3 mx = max(c0, max(max(a, b), max(c, e)));
+    float amt = sharpen * mix(0.35, 1.0, cube);
+    vec3 sharp = clamp(c0 + (c0 - (a + b + c + e) * 0.25) * amt * 1.6, mn, mx);
+    col = mix(sharp, texture2D(paint, vUv).rgb, paintAmt);
+  }
 
   vec3 bloom = texture2D(b0, vUv).rgb * 0.6 + texture2D(b1, vUv).rgb * 0.8 + texture2D(b2, vUv).rgb * 1.0 + texture2D(b3, vUv).rgb * 1.2;
   col = (col + bloom * strength) * exposure;
@@ -93,7 +113,7 @@ void main(){
 
   // Ink: edges where normals or depth jump, wobbled like a hand-drawn line.
   if (ink > 0.0) {
-    vec2 px = 1.7 / res;
+    vec2 px = 1.7 * lineScale / res;
     vec2 wob = (vec2(noise(vUv * 90.0), noise(vUv * 90.0 + 17.0)) - 0.5) * px * 1.6;
     vec2 uv = vUv + wob;
     vec3 n0 = texture2D(normals, uv).rgb;
@@ -104,7 +124,7 @@ void main(){
     nd += length(texture2D(normals, uv - o0).rgb - n0); dd += abs(viewZ(uv - o0) - z0);
     nd += length(texture2D(normals, uv + o1).rgb - n0); dd += abs(viewZ(uv + o1) - z0);
     nd += length(texture2D(normals, uv - o1).rgb - n0); dd += abs(viewZ(uv - o1) - z0);
-    float e = clamp(smoothstep(0.5, 0.9, nd) + smoothstep(0.04, 0.09, dd / z0), 0.0, 1.0);
+    float e = clamp(smoothstep(0.4, 0.8, nd) + smoothstep(0.03, 0.08, dd / z0), 0.0, 1.0);
     e *= 0.75 + 0.25 * noise(vUv * 25.0 + 3.0);
     col = mix(col, vec3(0.04, 0.03, 0.07), e * ink);
   }
@@ -117,14 +137,14 @@ void main(){
     float dist = length(fract(p) - 0.5);
     float rad = sqrt(clamp(1.0 - L * 2.2, 0.0, 1.0)) * 0.48;
     float dotMask = 1.0 - smoothstep(rad - 0.06, rad, dist);
-    col *= 1.0 - dotMask * smoothstep(0.42, 0.1, L) * 0.45 * halftone;
+    col *= 1.0 - dotMask * smoothstep(0.42, 0.1, L) * 0.45 * halftone * (1.0 - 0.75 * cube);
   }
 
   col += flash * vec3(1.0, 0.9, 0.75) * smoothstep(0.75, 0.0, length(d));
   col *= mix(1.0, smoothstep(0.95, 0.25, length(d * vec2(res.x / res.y, 1.0))), vignette);
   // Paper: low-frequency fibers plus fine grain.
-  col *= 0.94 + 0.06 * noise(vUv * res / 3.0);
-  col += (hash(vUv * res + time) - 0.5) * 0.035;
+  col *= 1.0 - (0.06 - 0.04 * cube) * (1.0 - noise(vUv * res / 3.0));
+  col += (hash(vUv * res + time) - 0.5) * (0.035 - 0.022 * cube);
   col = pow(max(col, 0.0), vec3(1.0 / 2.2));
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -139,6 +159,10 @@ export class Post {
   painterly = 0.3;
   ink = 1;
   halftone = 0.35;
+  /** Contrast-adaptive sharpen (full on the cube, a third elsewhere). */
+  sharpen = 0.55;
+  /** Ink line width multiplier (follows the pixel ratio so lines keep their size). */
+  lineScale = 1;
   private readonly r: any;
   private readonly sceneRT: any;
   private readonly normalRT: any;
@@ -152,6 +176,7 @@ export class Post {
   private readonly kuwa: any;
   private readonly composite: any;
   private readonly normalMat: any;
+  private readonly maskMat: any;
   private w = 1;
   private h = 1;
 
@@ -173,8 +198,21 @@ export class Post {
       strength: { value: 1 }, aberration: { value: 0 }, flash: { value: 0 }, exposure: { value: 1 },
       vignette: { value: 0 }, time: { value: 0 }, res: { value: new T.Vector2(1, 1) }, painterly: { value: 1 },
       ink: { value: 1 }, halftone: { value: 1 }, near: { value: 0.1 }, far: { value: 100 },
+      sharpen: { value: 0 }, lineScale: { value: 1 },
     });
     this.normalMat = new T.MeshNormalMaterial();
+    // Glass slots (layer 2) join the cube mask without touching the normals: colour is
+    // kept (src x 0 + dst x 1), alpha is forced to 1.
+    this.maskMat = new T.MeshBasicMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: T.CustomBlending,
+      blendEquation: T.AddEquation,
+      blendSrc: T.ZeroFactor,
+      blendDst: T.OneFactor,
+      blendSrcAlpha: T.OneFactor,
+      blendDstAlpha: T.OneFactor,
+    });
     this.quad = new T.Mesh(new T.PlaneGeometry(2, 2), this.bright);
     this.quad.frustumCulled = false;
     this.qScene = new T.Scene();
@@ -187,7 +225,7 @@ export class Post {
     this.w = w;
     this.h = h;
     this.sceneRT.setSize(w, h);
-    this.normalRT.setSize(Math.max(1, Math.round(w * 0.75)), Math.max(1, Math.round(h * 0.75)));
+    this.normalRT.setSize(w, h);
     this.paintRT.setSize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2)));
     this.levels.forEach((l, i) => {
       const s = 2 ** (i + 1);
@@ -208,7 +246,7 @@ export class Post {
     r.clear();
     r.render(scene, camera);
 
-    // Normals + depth of the solid objects only (layer 0), for the ink lines.
+    // Normals + depth of the cube only (layer 0), for the ink lines; alpha marks the cube.
     if (this.ink > 0) {
       const bg = scene.background;
       const mask = camera.layers.mask;
@@ -216,9 +254,15 @@ export class Post {
       scene.overrideMaterial = this.normalMat;
       camera.layers.set(0);
       r.setRenderTarget(this.normalRT);
-      r.setClearColor(0x8080ff, 1);
+      r.setClearColor(0x8080ff, 0);
       r.clear();
       r.render(scene, camera);
+      scene.overrideMaterial = this.maskMat;
+      camera.layers.set(2);
+      const auto = r.autoClear;
+      r.autoClear = false;
+      r.render(scene, camera);
+      r.autoClear = auto;
       r.setClearColor(0x000000, 0);
       scene.overrideMaterial = null;
       scene.background = bg;
@@ -266,6 +310,8 @@ export class Post {
     u.painterly.value = this.painterly;
     u.ink.value = this.ink;
     u.halftone.value = this.halftone;
+    u.sharpen.value = this.sharpen;
+    u.lineScale.value = this.lineScale;
     u.near.value = camera.near;
     u.far.value = camera.far;
     u.time.value = time % 100;
@@ -286,6 +332,7 @@ export class Post {
     this.kuwa.dispose();
     this.composite.dispose();
     this.normalMat.dispose();
+    this.maskMat.dispose();
     this.quad.geometry.dispose();
   }
 }

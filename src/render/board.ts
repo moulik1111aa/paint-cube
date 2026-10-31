@@ -51,7 +51,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   r.toneMapping = T.NoToneMapping;
   r.shadowMap.enabled = true;
   r.shadowMap.type = T.PCFSoftShadowMap;
-  let pixelRatio = Math.min(2, devicePixelRatio || 1);
+  // Sharp on high-density phones (up to 2.5x); the frame-rate governor below trades
+  // this down on slow phones and back up when they recover.
+  const maxRatio = Math.min(2.5, devicePixelRatio || 1);
+  let pixelRatio = maxRatio;
   r.setPixelRatio(pixelRatio);
   const post = new Post(T, r);
   const clock = new Clock();
@@ -63,8 +66,11 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const env = softEnv(T, r, '#9a8cff', '#0a0912');
   const M: Materials = makeMaterials(T, env);
   const camera = new T.PerspectiveCamera(38, 1, 0.5, 80);
+  // Layers: 0 the cube (inked, kept sharp), 1 effects, 2 glass slots, 3 the wall and
+  // ground (painted with the oil filter, no ink).
   camera.layers.enable(1);
   camera.layers.enable(2);
+  camera.layers.enable(3);
 
   world.add(new T.HemisphereLight('#7c6cff', '#1a1020', 1.1));
   const lamp = new T.SpotLight('#ffd29a', 3.4, 0, 0.62, 0.75, 0);
@@ -86,11 +92,13 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const wall = new T.Mesh(new T.PlaneGeometry(12, 18), new T.MeshStandardMaterial({ map: wallTex, roughness: 0.95 }));
   wall.position.set(0, 3, -5);
   wall.receiveShadow = true;
+  wall.layers.set(3);
   world.add(wall);
   const ground = new T.Mesh(new T.PlaneGeometry(40, 30), new T.MeshStandardMaterial({ map: groundTexture(T), roughness: 0.9 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(0, -2.6, 10);
   ground.receiveShadow = true;
+  ground.layers.set(3);
   world.add(ground);
 
   const cube = new T.Group();
@@ -818,7 +826,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const aspect = view.w / view.h;
     const v = (camera.fov * Math.PI) / 180;
     const hfov = 2 * Math.atan(Math.tan(v / 2) * aspect);
-    const dist = 2.65 / Math.sin(Math.min(v, hfov) / 2);
+    const dist = 2.4 / Math.sin(Math.min(v, hfov) / 2);
     camera.position.set(shakeOff[0], 0.9 + shakeOff[1], dist);
     camera.lookAt(0, 0.1, 0);
     camera.rotateZ(shakeOff[2]);
@@ -830,6 +838,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     wallTex.offset.x = -(wallW / 12 - 1) / 2;
     r.getDrawingBufferSize(size);
     post.setSize(size.x, size.y);
+    post.lineScale = 1.3 * Math.max(1, pixelRatio / 2);
     post.strength = 0.55 + pulse.bloom;
     post.aberration = pulse.aberr;
     post.flash = pulse.flash;
@@ -840,6 +849,41 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   let frames = 0;
   let fpsT = 0;
   let slowFor = 0;
+  let fastFor = 0;
+  let warmup = 3;
+  /** Quality steps, best first; the governor moves along this list. */
+  const steps: (() => void)[] = [];
+  for (let pr = maxRatio; pr > 1.001; pr = Math.max(1, pr - 0.25)) {
+    const v = pr;
+    steps.push(() => {
+      pixelRatio = v;
+      r.setPixelRatio(v);
+      post.painterly = 0.3;
+      fx.budget = 1;
+    });
+  }
+  steps.push(() => {
+    pixelRatio = 1;
+    r.setPixelRatio(1);
+    post.painterly = 0.3;
+    fx.budget = 1;
+  });
+  steps.push(() => {
+    pixelRatio = 1;
+    r.setPixelRatio(1);
+    post.painterly = 0;
+    fx.budget = 1;
+  });
+  steps.push(() => {
+    pixelRatio = 1;
+    r.setPixelRatio(1);
+    post.painterly = 0;
+    fx.budget = 0.5;
+  });
+  let level = 0;
+  /** The best step we may climb back to: a level that was too slow twice is off limits. */
+  let ceiling = 0;
+  const fails = steps.map(() => 0);
   const loop = manual
     ? null
     : new RenderLoop(host, (t) => {
@@ -848,24 +892,42 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
         now = t;
         update(real);
         render();
+        // Shader compiles and the first frames are slow everywhere: don't judge them.
+        if (warmup > 0) {
+          warmup -= real;
+          frames = 0;
+          fpsT = 0;
+          return;
+        }
         frames++;
         fpsT += real;
         if (fpsT >= 0.5) {
           const fps = frames / fpsT;
-          // Slow phone: trade resolution, then the oil-paint filter, then particles, for frame rate.
+          // Slow phone: trade resolution, then the oil-paint filter, then particles, for
+          // frame rate. A steady fast phone climbs back up, but not to a level that was
+          // too slow twice.
           slowFor = fps < 40 ? slowFor + fpsT : 0;
-          if (slowFor > 2) {
-            if (pixelRatio > 1) {
-              pixelRatio = Math.max(1, pixelRatio - 0.25);
-              r.setPixelRatio(pixelRatio);
-            } else if (post.painterly > 0) post.painterly = 0;
-            else fx.budget = 0.5;
+          fastFor = fps > 55 ? fastFor + fpsT : 0;
+          if (slowFor > 2 && level < steps.length - 1) {
+            if (++fails[level] >= 2) ceiling = Math.max(ceiling, level + 1);
+            level++;
+            steps[level]();
             slowFor = 0;
+            fastFor = 0;
+          } else if (fastFor > 5 && level > ceiling) {
+            level--;
+            steps[level]();
+            fastFor = 0;
           }
           frames = 0;
           fpsT = 0;
         }
       });
+  // After a hidden/asleep stretch the first frames are slow again.
+  const onVisible = () => {
+    if (document.visibilityState === 'visible') warmup = 1.5;
+  };
+  document.addEventListener('visibilitychange', onVisible);
 
   const board: Board = {
     onTap: null,
@@ -910,6 +972,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     },
     dispose() {
       loop?.stop();
+      document.removeEventListener('visibilitychange', onVisible);
       host.removeEventListener('pointerdown', onDown);
       host.removeEventListener('pointermove', onMove);
       host.removeEventListener('pointerup', onUp);
