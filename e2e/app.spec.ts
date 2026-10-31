@@ -180,3 +180,96 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   await expect(page.locator('.result')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('agents: toggle on, both players lock in, a targeted power, cooldown, the ultimate charges and fires', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="local"]');
+  await page.click('[data-mode="rotating"]');
+  await expect(page.locator('[data-agents]')).not.toHaveClass(/on/);
+  await page.click('[data-agents]');
+  await expect(page.locator('[data-go="start"]')).toHaveText('Pick agents');
+  await page.click('[data-go="start"]');
+
+  // Moulik browses to STENCIL, peeks at a power preview, and locks in.
+  await expect(page.locator('.agentcard .who b')).toHaveText('BLITZ');
+  await page.click('[data-next]');
+  await expect(page.locator('.agentcard .who b')).toHaveText('STENCIL');
+  await page.click('[data-pw="tape"]');
+  await expect(page.locator('.preview canvas')).toBeVisible();
+  await page.click('[data-go="lock"]');
+  await expect(page.locator('.splash')).toContainText('LOCKED IN');
+  await expect(page.locator('.passcard h2')).toHaveText('Riya');
+  await page.click('[data-go="ready"]');
+  // Riya picks BLITZ (left of STENCIL).
+  await expect(page.locator('.tag')).toContainText('Riya');
+  await expect(page.locator('.agentcard .who b')).toHaveText('STENCIL');
+  await page.click('[data-prev]');
+  await expect(page.locator('.agentcard .who b')).toHaveText('BLITZ');
+  await page.click('[data-go="lock"]');
+
+  // The agents how-to card comes up once; skip it.
+  await expect(page.locator('.help h2')).toHaveText('Powers');
+  await page.click('.help [data-skip]');
+  await expect(page.locator('.abilities .ab')).toHaveCount(4);
+  await expect(page.locator('.tagbox.p1 .agent')).toContainText('STENCIL');
+  await expect(page.locator('.tagbox.p2 .agent')).toContainText('BLITZ');
+  expect(await page.evaluate(() => window.__game!.state()!.agents!.picks)).toEqual(['stencil', 'blitz']);
+
+  // Tape with targeting: tap the power, cells glow, tap one.
+  await page.click('.ab[data-ab="tape"]');
+  await expect(page.locator('.hint')).toContainText('Tape');
+  await expect(page.locator('.ab[data-ab="tape"]')).toHaveClass(/on/);
+  await tap(page, 4);
+  const effects = await page.evaluate(() => window.__game!.state()!.agents!.effects);
+  expect(effects).toEqual([expect.objectContaining({ kind: 'tape', cell: 4, by: 0 })]);
+  await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveText('2');
+  await expect(page.locator('.ab[data-ab="fixative"]')).toHaveClass(/off/); // one power per turn
+  await tap(page, 0); // then the normal move
+
+  // Riya can't paint the taped cell.
+  await tap(page, 4);
+  await expect(page.locator('.toast')).toContainText('Taped');
+  await tap(page, 9);
+
+  // Two more rounds of moves: the cooldown ticks down, the ultimate ring fills.
+  // (A cooldown counts the turns it stays out: 2 now, 1 next turn, then ready.)
+  await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveText('2');
+  await expect(page.locator('.ab[data-ab="tape"]')).toHaveClass(/off/);
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('1/3');
+  await tap(page, 20);
+  await tap(page, 11);
+  await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveText('1');
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('2/3');
+  await tap(page, 24);
+  await tap(page, 15);
+  await expect(page.locator('.ab[data-ab="tape"] .cd')).toHaveCount(0);
+  await expect(page.locator('.ab[data-ab="tape"]')).not.toHaveClass(/off/);
+  await expect(page.locator('.ab[data-ab="lockdown"] em')).toHaveText('READY');
+
+  // Fire the ultimate: confirm, splash, and Riya is locked down.
+  await page.click('.ab[data-ab="lockdown"]');
+  await page.click('.confirm [data-ok]');
+  await expect(page.locator('.splash')).toContainText('LOCKDOWN');
+  await settle(page);
+  expect(await page.evaluate(() => window.__game!.state()!.agents!.effects.some((e) => e.kind === 'lockdown'))).toBe(true);
+  expect(await page.evaluate(() => window.__game!.state()!.agents!.ult[0])).toBe(0);
+  await tap(page, 18);
+  await expect(page.locator('.abilities')).toHaveClass(/p2/);
+  await expect(page.locator('.ab[data-ab="shove"]')).toHaveClass(/off/);
+  expect(await page.evaluate(() => window.__game!.swipe(2, 140, 0))).toBe(false);
+  await expect(page.locator('.toast')).toContainText('Locked down');
+
+  // Leaving and resuming keeps the agents match.
+  await page.click('.back');
+  await page.click('[data-go="resume"]');
+  await expect(page.locator('.tagbox.p1 .agent')).toContainText('STENCIL');
+  await expect(page.locator('.abilities')).toHaveClass(/p2/);
+  expect(errors).toEqual([]);
+});

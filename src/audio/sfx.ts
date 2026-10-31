@@ -114,4 +114,71 @@ export class Sfx {
     this.burst(2);
     [523, 659, 784, 1047].forEach((f, i) => this.tone(t + 0.12 + i * 0.09, 0.5, 'triangle', f, f * 1.01, 0.22));
   }
+
+  /** Agent select: a sprayed LOCK IN stinger. */
+  stinger(): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    this.noise(t, 0.25, 'bandpass', 1800, 5200, 1.4, 0.5);
+    [392, 523, 784].forEach((f, i) => this.tone(t + 0.05 + i * 0.07, 0.35, 'square', f, f * 1.02, 0.12));
+    this.tone(t, 0.4, 'sine', 90, 40, 0.8);
+  }
+
+  /** A power or ultimate going off: each has its own little signature. */
+  power(id: string): void {
+    const c = this.ready();
+    if (!c) return;
+    const t = c.currentTime;
+    switch (id) {
+      case 'doubleTap':
+        this.splat(1.2);
+        setTimeout(() => this.splat(1.35), 110);
+        break;
+      case 'shove':
+        this.tone(t, 0.18, 'sawtooth', 220, 80, 0.25);
+        this.noise(t, 0.2, 'lowpass', 900, 200, 0.8, 0.5);
+        break;
+      case 'overspray':
+        this.noise(t, 0.6, 'highpass', 2500, 7000, 0.7, 0.45);
+        break;
+      case 'tape':
+        this.noise(t, 0.32, 'bandpass', 3000, 1200, 6, 0.4);
+        this.tone(t + 0.3, 0.05, 'square', 300, 300, 0.1);
+        break;
+      case 'fixative':
+        this.noise(t, 0.45, 'highpass', 6000, 9000, 0.5, 0.25);
+        this.tone(t + 0.1, 0.4, 'sine', 1320, 1760, 0.12);
+        break;
+      case 'wetFloor':
+        [880, 660, 880, 660].forEach((f, i) => this.tone(t + i * 0.09, 0.08, 'square', f, f, 0.08));
+        break;
+      case 'spin':
+        this.whoosh();
+        this.tone(t, 0.4, 'triangle', 300, 900, 0.12);
+        break;
+      case 'swap':
+        this.tone(t, 0.12, 'square', 600, 900, 0.1);
+        this.tone(t + 0.12, 0.12, 'square', 900, 600, 0.1);
+        break;
+      case 'trap':
+        this.tone(t, 0.08, 'square', 1200, 1200, 0.08);
+        this.tone(t + 0.12, 0.08, 'square', 1200, 1200, 0.08);
+        break;
+      case 'afterimage':
+        for (let i = 0; i < 3; i++) this.tone(t + i * 0.12, 0.3, 'sine', 660 - i * 60, 330 - i * 30, 0.15 / (i + 1));
+        break;
+      case 'delay':
+        this.tone(t, 0.6, 'sine', 500, 180, 0.2);
+        break;
+      case 'reverb':
+        for (let i = 0; i < 4; i++) this.tone(t + i * 0.1, 0.25, 'triangle', 880, 880, 0.2 * 0.6 ** i);
+        break;
+      default:
+        // Ultimates: a big boom and a rising chord.
+        this.tone(t, 0.8, 'sine', 70, 30, 1.0);
+        this.noise(t, 0.7, 'lowpass', 6000, 300, 0.6, 0.7);
+        [262, 330, 392, 523].forEach((f, i) => this.tone(t + 0.1 + i * 0.06, 0.6, 'sawtooth', f, f * 1.01, 0.08));
+    }
+  }
 }

@@ -13,6 +13,7 @@ import { haptics } from '../platform/haptics.ts';
 import { CELLS, CENTER, coord, type Cell, type Line, type Player } from '../core/geometry.ts';
 import { permutation, sameTwist, type Twist, type Axis, type Slice } from '../core/twist.ts';
 import type { GameEvent } from '../core/events.ts';
+import type { AbilityId, Decor } from '../core/agents.ts';
 import type { Mode } from '../core/match.ts';
 
 const SPACING = 1.0;
@@ -48,6 +49,12 @@ export interface Board {
   setTurn(p: Player | null): void;
   /** Player names, for the big wall tag when a match is won. */
   names: [string, string];
+  /** Agents mode: wet drips, chrome, cracks, tape, traps, seals and wet-floor lines. */
+  decorate(d: Decor | null): void;
+  /** Agents mode: pulse these cells as targets (null clears). */
+  highlight(cells: readonly number[] | null, color?: string): void;
+  /** Agents mode: a caption for an ability (its display name). */
+  abilityName: ((id: AbilityId) => string) | null;
   /** Manual clock (tests): advance game time and optionally draw. */
   advance(sec: number, draw?: boolean): void;
   dispose(): void;
@@ -761,10 +768,347 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
         case 'matchWon':
           await celebrate(e.winner);
           break;
+        case 'ability':
+          await abilityFx(e.player, e.id, e.cells);
+          break;
+        case 'wiped':
+          await wipe(e.cell, e.player);
+          break;
+        case 'moved':
+          await slide(e.moves, !!e.flip);
+          break;
+        case 'converted':
+          convert(e.cell, e.to);
+          break;
+        case 'dried':
+          for (const c of e.cells) if (shells[c]) fx.mist(toWorld(c), '#ffffff', 10, 1.2);
+          break;
+        case 'rewound':
+          await rewindFx(e.cells);
+          break;
+        case 'passed':
+          void caption('PASS', '#d9d4e4', toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 2.6), 1.6);
+          await wait(0.5);
+          break;
+        case 'fizzled':
+          void caption('FIZZ', '#d9d4e4', toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 2.6), 1.5);
+          await wait(0.3);
+          break;
         default:
           break;
       }
     }
+  }
+
+
+  // ---- Agents mode: decorations, targets and power effects ----
+  const decorMats = {
+    tape: new T.MeshBasicMaterial({ map: tapeTexture(), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 }),
+    trap: [0, 1].map((p) => new T.MeshBasicMaterial({ map: trapTexture(PLAYER_COLORS[p]), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 })),
+    seal: new T.MeshStandardMaterial({ color: '#bff3ff', transparent: true, opacity: 0.32, roughness: 0.05, metalness: 0.2, envMap: env, envMapIntensity: 1.6, depthWrite: false }),
+    chrome: [0, 1].map((p) => new T.MeshStandardMaterial({ color: new T.Color(PLAYER_COLORS[p]).lerp(new T.Color('#ffffff'), 0.45), metalness: 1, roughness: 0.12, envMap: env, envMapIntensity: 2.2 })),
+    floor: new T.MeshBasicMaterial({ color: new T.Color('#f5e663').multiplyScalar(1.6), transparent: true, opacity: 0.55, depthWrite: false, blending: T.AdditiveBlending }),
+  };
+  function tapeTexture(): any {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const g = c.getContext('2d')!;
+    const strip = (rot: number) => {
+      g.save();
+      g.translate(128, 128);
+      g.rotate(rot);
+      g.fillStyle = '#f5e663';
+      g.fillRect(-150, -26, 300, 52);
+      g.fillStyle = '#0d0a14';
+      for (let x = -150; x < 150; x += 34) {
+        g.beginPath();
+        g.moveTo(x, -26);
+        g.lineTo(x + 17, -26);
+        g.lineTo(x + 3, 26);
+        g.lineTo(x - 14, 26);
+        g.fill();
+      }
+      g.restore();
+    };
+    strip(Math.PI / 4);
+    strip(-Math.PI / 4);
+    const t = new T.CanvasTexture(c);
+    t.colorSpace = T.SRGBColorSpace;
+    return t;
+  }
+  function trapTexture(color: string): any {
+    const c = document.createElement('canvas');
+    c.width = c.height = 256;
+    const g = c.getContext('2d')!;
+    g.lineCap = 'round';
+    for (const [w, col] of [[30, '#0d0a14'], [16, color]] as const) {
+      g.strokeStyle = col;
+      g.lineWidth = w;
+      g.beginPath();
+      g.arc(128, 128, 78, 0, Math.PI * 2);
+      g.stroke();
+      g.beginPath();
+      g.arc(128, 128, 34, 0, Math.PI * 2);
+      g.stroke();
+      for (const a of [0, 1, 2, 3]) {
+        const an = (a * Math.PI) / 2;
+        g.beginPath();
+        g.moveTo(128 + Math.cos(an) * 92, 128 + Math.sin(an) * 92);
+        g.lineTo(128 + Math.cos(an) * 116, 128 + Math.sin(an) * 116);
+        g.stroke();
+      }
+    }
+    const t = new T.CanvasTexture(c);
+    t.colorSpace = T.SRGBColorSpace;
+    return t;
+  }
+
+  /** Decoration meshes by key ("tape:5"), so a redecorate only touches what changed. */
+  const decor = new Map<string, any>();
+  let lastDecor: Decor | null = null;
+  function setDecor(key: string, want: boolean, make: () => any, parent: any): void {
+    const have = decor.get(key);
+    if (have && (!want || have.parent !== parent)) {
+      have.parent?.remove(have);
+      decor.delete(key);
+    }
+    if (want && !decor.get(key)) {
+      const m = make();
+      parent.add(m);
+      decor.set(key, m);
+    }
+  }
+  function wetDrips(p: Player): any {
+    const g = new T.Group();
+    for (let k = 0; k < 3; k++) {
+      const d = new T.Group();
+      const rod = new T.Mesh(dripRod, M.drip[p]);
+      d.add(rod);
+      d.position.set((k - 1) * 0.22, -0.43, 0.44);
+      d.userData.phase = k * 1.7;
+      d.userData.rod = rod;
+      g.add(d);
+    }
+    g.userData.wet = true;
+    return g;
+  }
+  function decorate(d: Decor | null): void {
+    lastDecor = d;
+    const has = (arr: readonly number[] | undefined, c: number) => !!arr && arr.includes(c);
+    for (let c = 0; c < CELLS; c++) {
+      const s = shells[c];
+      const inner = s?.userData.inner;
+      // Chrome: the paint body goes mirror-bright.
+      if (s) {
+        const want = has(d?.chrome, c);
+        if (want !== !!s.userData.chrome) {
+          s.userData.chrome = want;
+          bodiesOf(s).forEach((m: any) => (m.material = want ? decorMats.chrome[owners[c]!] : M.paint[owners[c]!]));
+        }
+        // Cracks follow the rules' "next to fade".
+        if (has(d?.cracking, c)) crack(c);
+        else if (s.userData.cracking && d) uncrack(c);
+      }
+      setDecor(`wet:${c}`, !!inner && has(d?.wet, c), () => wetDrips(owners[c]!), inner);
+      setDecor(`seal:${c}`, !!inner && has(d?.seal, c), () => {
+        const m = new T.Mesh(shellGeo, decorMats.seal);
+        m.scale.setScalar(1.16);
+        return m;
+      }, inner);
+      setDecor(`tape:${c}`, has(d?.tape, c), () => {
+        const m = new T.Mesh(casingGeo, decorMats.tape);
+        m.scale.setScalar(1.03);
+        m.layers.set(1);
+        return m;
+      }, casings[c]);
+      const trap = d?.trap.find((t) => t.cell === c);
+      setDecor(`trap:${c}`, !!trap, () => {
+        const m = new T.Mesh(casingGeo, decorMats.trap[trap!.by]);
+        m.scale.setScalar(1.035);
+        m.layers.set(1);
+        return m;
+      }, casings[c]);
+    }
+    // Wet-floor lines: a caution-yellow beam along the line.
+    const lines = new Set((d?.floor ?? []).map((f) => f.line.join('-')));
+    for (const key of [...decor.keys()].filter((k) => k.startsWith('floor:'))) if (!lines.has(key.slice(6))) setDecor(key, false, () => null, cube);
+    for (const f of d?.floor ?? []) {
+      setDecor(`floor:${f.line.join('-')}`, true, () => {
+        const a = slot(f.line[0]);
+        const b = slot(f.line[2]);
+        const m = new T.Mesh(new T.CylinderGeometry(0.07, 0.07, a.distanceTo(b) + 0.9, 10, 1, true), decorMats.floor);
+        m.position.copy(a).lerp(b, 0.5);
+        m.quaternion.setFromUnitVectors(new T.Vector3(0, 1, 0), b.clone().sub(a).normalize());
+        m.layers.set(1);
+        return m;
+      }, cube);
+    }
+  }
+  function uncrack(c: number): void {
+    const s = shells[c];
+    const p = owners[c];
+    if (!s || p === null) return;
+    s.userData.cracking = false;
+    bodiesOf(s).forEach((m: any) => (m.material = s.userData.chrome ? decorMats.chrome[p] : M.paint[p]));
+    const inner = s.userData.inner ?? s;
+    for (const ch of [...inner.children]) if (ch.material === crackMat) inner.remove(ch);
+  }
+  function animateDecor(): void {
+    for (const [k, m] of decor) {
+      if (k.startsWith('wet:')) {
+        for (const d of m.children) {
+          const t = (now * 0.8 + d.userData.phase) % 1.6;
+          const len = Math.min(1, t / 1.1) * 0.32;
+          d.userData.rod.scale.set(0.03, Math.max(0.001, len), 0.03);
+          d.visible = t < 1.4;
+        }
+      } else if (k.startsWith('floor:')) m.material.opacity = 0.4 + 0.2 * Math.sin(now * 5);
+    }
+    for (const t of targets) {
+      t.material.opacity = 0.65 + 0.35 * Math.sin(now * 8);
+      t.scale.setScalar(0.9 + 0.08 * Math.sin(now * 8));
+    }
+  }
+
+  // Targets: pulsing rings on the cells a power can pick.
+  const targets: any[] = [];
+  const targetTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    g.lineWidth = 16;
+    g.strokeStyle = '#0d0a14';
+    g.beginPath();
+    g.arc(64, 64, 44, 0, Math.PI * 2);
+    g.stroke();
+    g.lineWidth = 9;
+    g.strokeStyle = '#ffffff';
+    g.stroke();
+    g.fillStyle = 'rgba(255,255,255,0.28)';
+    g.beginPath();
+    g.arc(64, 64, 38, 0, Math.PI * 2);
+    g.fill();
+    return new T.CanvasTexture(c);
+  })();
+  function highlight(cells: readonly number[] | null, color = '#ffffff'): void {
+    for (const t of targets) t.parent?.remove(t);
+    targets.length = 0;
+    for (const c of cells ?? []) {
+      // A glowing ring drawn over everything, so targets inside the cube show too.
+      const m = new T.Sprite(new T.SpriteMaterial({ map: targetTex, color: new T.Color(color).multiplyScalar(1.6), transparent: true, depthTest: false, depthWrite: false }));
+      m.scale.setScalar(0.95);
+      m.renderOrder = 30;
+      m.layers.set(1);
+      m.position.copy(slot(c));
+      cube.add(m);
+      targets.push(m);
+    }
+  }
+
+  /** The ability's moment: a graffiti caption, a burst, a sound; ultimates hit harder. */
+  async function abilityFx(p: Player, id: AbilityId, cells: readonly number[]): Promise<void> {
+    const color = PLAYER_COLORS[p];
+    const isUltimate = id === 'chrome' || id === 'lockdown' || id === 'flip' || id === 'rewind';
+    const at = cells.length ? toWorld(cells[0]) : toWorld(CENTER);
+    const label = (board.abilityName?.(id) ?? id).toUpperCase();
+    sfx.power(id);
+    haptics.tap();
+    if (isUltimate) {
+      clock.scale = 0.4;
+      hit({ shake: 0.5, bloom: 1.6, flash: 0.25, aberr: 0.018 });
+      fx.ring(toWorld(CENTER), color, 5, 0.7);
+      for (let i = 0; i < 6; i++) fx.splat(toWorld(Math.floor(Math.random() * CELLS)).addScaledVector(towardCamera(toWorld(CENTER)), 1), color, 1.6, 0.7);
+      void caption(label, color, toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 3), label.length > 7 ? 1.6 : 2.1);
+      await wait(0.35);
+      clock.scale = 1;
+      await wait(0.25);
+      return;
+    }
+    hit({ shake: 0.2, bloom: 0.7, aberr: 0.006 });
+    fx.ring(at, color, 2.2, 0.4);
+    fx.mist(at.clone().addScaledVector(towardCamera(at), 0.5), color, 40, 3);
+    const mid = toWorld(CENTER);
+    void caption(label, color, mid.lerp(at, 0.4).addScaledVector(towardCamera(at), 2.4), label.length > 7 ? 1.25 : 1.6);
+    await wait(0.4);
+  }
+
+  async function wipe(cell: number, p: Player): Promise<void> {
+    const s = shells[cell];
+    if (!s) return;
+    const pos = toWorld(cell);
+    sfx.whoosh();
+    fx.mist(pos.clone().addScaledVector(towardCamera(pos), 0.4), '#e9e4f2', 90, 4);
+    await anim(0.3, (k) => s.scale.setScalar(1 - 0.9 * ease.inCubic(k)));
+    fx.burst(pos, PLAYER_COLORS[p], 16, 3, 0.05);
+    hit({ shake: 0.15 });
+    removeShell(cell);
+  }
+
+  async function slide(moves: { from: number; to: number; player: Player }[], flip: boolean): Promise<void> {
+    if (flip) {
+      // The whole cube somersaults, then the paint lands where the rules put it.
+      sfx.whoosh();
+      await anim(0.6, (k) => (spinX = Math.PI * 2 * ease.inOutCubic(k)));
+      spinX = 0;
+      const moved = moves.map((m) => ({ ...m, s: shells[m.from] }));
+      for (const m of moved) {
+        shells[m.from] = null;
+        owners[m.from] = null;
+      }
+      for (const m of moved) {
+        shells[m.to] = m.s;
+        owners[m.to] = m.player;
+        m.s?.position.copy(slot(m.to));
+      }
+      hit({ shake: 0.5, bloom: 0.8 });
+      return;
+    }
+    const moved = moves.map((m) => ({ ...m, s: shells[m.from] }));
+    for (const m of moved) {
+      shells[m.from] = null;
+      owners[m.from] = null;
+    }
+    for (const m of moved) {
+      shells[m.to] = m.s;
+      owners[m.to] = m.player;
+    }
+    sfx.whoosh();
+    await anim(0.35, (k) => {
+      for (const m of moved) {
+        const a = slot(m.from);
+        const b = slot(m.to);
+        m.s?.position.copy(a.lerp(b, ease.inOutCubic(k))).add(new T.Vector3(0, Math.sin(k * Math.PI) * 0.35, 0));
+      }
+    });
+    for (const m of moved) {
+      const w = toWorld(m.to);
+      fx.mist(w, PLAYER_COLORS[m.player], 16, 1.5);
+    }
+    hit({ shake: 0.14 });
+  }
+
+  function convert(cell: number, to: Player): void {
+    if (shells[cell]) removeShell(cell);
+    placeShell(cell, to, true);
+    const pos = toWorld(cell);
+    fx.burst(pos, PLAYER_COLORS[to], 30, 4, 0.06);
+    fx.ring(pos, PLAYER_COLORS[to], 2.4, 0.45);
+    void caption('GOTCHA', PLAYER_COLORS[to], pos.clone().addScaledVector(towardCamera(pos), 2), 1.6);
+    hit({ shake: 0.3, bloom: 0.8 });
+  }
+
+  async function rewindFx(cells: readonly Cell[]): Promise<void> {
+    sfx.whoosh();
+    hit({ aberr: 0.03, flash: 0.15 });
+    const y0 = yaw;
+    await anim(0.5, (k) => (yaw = y0 - Math.PI * 2 * ease.inOutCubic(k)));
+    yaw = y0;
+    for (let i = 0; i < CELLS; i++) {
+      if (owners[i] === cells[i]) continue;
+      if (shells[i]) removeShell(i);
+      if (cells[i] !== null) placeShell(i, cells[i]!, true);
+    }
+    hit({ shake: 0.3 });
   }
 
   function sync(cells: readonly Cell[], cracking: readonly number[] = []): void {
@@ -776,6 +1120,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       if (p !== null) placeShell(i, p, false);
     }
     cracking.forEach((c) => crack(c));
+    if (lastDecor) decorate(lastDecor);
   }
 
   /** Match won: a beat of slow motion, confetti from both sides, and the winner's tag on the wall. */
@@ -817,6 +1162,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   // Input: drag spins (yaw only in stacking, so "down" stays down); a tap picks a cell.
+  let spinX = 0;
   let yaw = 0.78;
   let pitch = 0.5;
   let vyaw = 0;
@@ -896,7 +1242,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     lastY = e.clientY;
     host.setPointerCapture?.(e.pointerId);
     grab = null;
-    if (board.twistEnabled && mode === 'rotating' && !preview) {
+    if (board.twistEnabled && !preview) {
       const p = pick(e.clientX, e.clientY);
       if (p) grab = { ...p, x0: e.clientX, y0: e.clientY, twist: null, ctx: null };
     }
@@ -990,7 +1336,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
         if (mode === 'rotating') pitch += (0.5 - pitch) * Math.min(1, real * 0.8);
       }
     }
-    cube.rotation.set(pitch, yaw, 0, 'XYZ');
+    cube.rotation.set(pitch + spinX, yaw, 0, 'XYZ');
     // The Core breathes in the colour of whoever is to move.
     const beat = turnP === null ? Math.sin(now * 3) : Math.pow(Math.max(0, Math.sin(now * 4.2)), 3) * 2 - 0.6;
     core.scale.setScalar(1 + beat * 0.06);
@@ -1019,6 +1365,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       }
     }
     if (aimHalo.visible) haloMat.opacity = 0.7 + 0.25 * Math.sin(now * 9);
+    if (decor.size || targets.length) animateDecor();
     pulse.punch *= Math.exp(-4 * real);
     pulse.bloom *= Math.exp(-5 * real);
     pulse.aberr *= Math.exp(-5 * real);
@@ -1159,6 +1506,9 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     attract: false,
     aimAt: null,
     aim: (c) => showAim(c),
+    decorate,
+    highlight,
+    abilityName: null,
     names: ['P1', 'P2'],
     setTurn(p) {
       turnP = p;

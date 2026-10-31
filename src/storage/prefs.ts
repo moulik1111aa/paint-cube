@@ -3,18 +3,26 @@
 // is guarded and the app works without it.
 
 import type { MatchState, Mode } from '../core/match.ts';
+import { AGENT_IDS, type AgentId } from '../core/agents.ts';
+
+export type HelpTopic = Mode | 'agents';
 
 export interface Prefs {
   nickname: string;
   player2: string;
   mode: Mode;
   sound: boolean;
-  /** Modes whose how-to-play cards have been shown. */
-  seenHelp: Mode[];
+  /** How-to-play cards already shown. */
+  seenHelp: HelpTopic[];
+  /** Agents mode on for local matches (Classic when off). */
+  agents: boolean;
+  /** The last agents each player picked (the select screen starts there). */
+  picks: [AgentId, AgentId];
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [] };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'] };
+const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
   try {
@@ -26,7 +34,9 @@ export function loadPrefs(): Prefs {
       player2: typeof p.player2 === 'string' ? p.player2 : '',
       mode: p.mode === 'cascade' ? 'cascade' : 'rotating',
       sound: p.sound !== false,
-      seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is Mode => m === 'rotating' || m === 'cascade') : [],
+      seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is HelpTopic => m === 'rotating' || m === 'cascade' || m === 'agents') : [],
+      agents: p.agents === true,
+      picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],
     };
   } catch {
     return { ...DEFAULTS };

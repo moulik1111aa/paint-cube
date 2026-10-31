@@ -12,10 +12,16 @@ import { MAX_MARKS } from '../core/rotating.ts';
 import { landing } from '../core/cascade.ts';
 import type { Twist } from '../core/twist.ts';
 import type { GameEvent, IllegalReason } from '../core/events.ts';
-import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
+import { applyMove, checkMove, legalMoves, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
 import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
 import { rng } from '../core/rng.ts';
-import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type Prefs } from '../storage/prefs.ts';
+import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type HelpTopic, type Prefs } from '../storage/prefs.ts';
+import {
+  AGENTS, AGENT_IDS, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
+  type AbilityId, type AbilityUse, type AgentId,
+} from '../core/agents.ts';
+import { LINES } from '../core/geometry.ts';
+import { ABILITY_TEXT, AGENT_LOOK, abilityIcon, abilityText, agentArt, playPreview } from './agents-ui.ts';
 import { haptics } from '../platform/haptics.ts';
 import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
 import { connectFirebase } from '../net/firebase.ts';
@@ -40,9 +46,19 @@ declare global {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const COLORS = ['p1', 'p2'] as const;
+const PLAYER_COLORS_CSS = ['#ff7a1a', '#1aa3ff'];
 
-/** How to play, per mode: short cards, one idea each. */
-const HELP: Record<Mode, { title: string; cards: [string, string][] }> = {
+/** How to play, per mode (and for Agents): short cards, one idea each. */
+const HELP: Record<HelpTopic, { title: string; cards: [string, string][] }> = {
+  agents: {
+    title: 'Agents',
+    cards: [
+      ['Powers', 'Each writer has 3 powers and an ultimate. On your turn use ONE of them (tap it, then tap a target), then make your normal move.'],
+      ['Timers', 'A used power cools down: the number on it is how many of your turns until it’s back. Some only unlock later in a round. Every round starts fresh.'],
+      ['Wet paint', 'Paint a power puts down or moves is wet (it drips), and so is your move after Shove, Overspray, Spin or Fixative. A line with wet paint only counts once it dries, a couple of its owner’s turns later, if it’s still there. So the other side always gets a reply.'],
+      ['Ultimate', 'The ring fills a little every turn, and faster when you’re losing. When it’s full, your ultimate is ready. Ultimates aren’t wet: they hit straight away.'],
+    ],
+  },
   rotating: {
     title: 'Twist',
     cards: [
@@ -70,6 +86,14 @@ const REASONS: Partial<Record<IllegalReason, string>> = {
   'column-full': 'That column is full.',
   'twisted-last-turn': 'You twisted last turn.',
   'undoes-last-twist': "Can't undo the last twist.",
+  taped: 'Taped off. Nobody can paint there.',
+  'locked-down': 'Locked down: no powers or twists right now.',
+  sealed: 'Sealed paint: that layer can’t turn.',
+  'power-used': 'One power per turn.',
+  'ult-not-ready': 'Ultimate not charged yet.',
+  cooldown: 'Still cooling down.',
+  'no-target': 'Nothing to use that on right now.',
+  'bad-target': 'Not a valid target.',
 };
 
 export function startApp(app: HTMLElement): void {
@@ -90,6 +114,8 @@ export function startApp(app: HTMLElement): void {
   let match: MatchState | null = null;
   let names: [string, string] = ['Player 1', 'Player 2'];
   let busy = false;
+  /** Agents mode: the power being aimed (cells picked so far, twists for Spin/Flip). */
+  let targeting: { id: AbilityId; uses: AbilityUse[]; picked: number[]; twists: Twist[] } | null = null;
   // Online: the session, its latest view, and animation bookkeeping.
   let online: OnlineSession | null = null;
   let view: RoomView | null = null;
@@ -120,6 +146,8 @@ export function startApp(app: HTMLElement): void {
     stopDemo();
     board.attract = true;
     board.setTurn(null);
+    board.decorate(null);
+    board.highlight(null);
     const mode: Mode = Math.random() < 0.5 ? 'rotating' : 'cascade';
     demo = newMatch(mode, 0);
     board.setMode(mode);
@@ -177,6 +205,10 @@ export function startApp(app: HTMLElement): void {
   }
 
   function show(name: string, html: string): void {
+    if (targeting) {
+      targeting = null;
+      board?.highlight(null);
+    }
     if (!HOMEISH.has(name)) enterDeep();
     else if (deep) {
       // Leaving to home from a button: drop our extra entry quietly.
@@ -253,10 +285,23 @@ export function startApp(app: HTMLElement): void {
         '<div class="modes">' +
         '<button class="mode" data-mode="rotating"><b>Twist</b><span>Place paint or twist a layer. Max 3 marks each: your oldest fades. First line of 3 wins.</span></button>' +
         '<button class="mode" data-mode="cascade"><b>Cascade</b><span>Drop paint down columns. Lines burst and score; falls chain into combos. First to 5.</span></button>' +
-        '</div><button class="btn big" data-go="start">Start · best of 3</button>',
+        '</div>' +
+        '<button class="toggle" data-agents role="switch"><span class="txt"><b>Agents</b><span>Pick a writer with powers. Off = Classic.</span></span><i class="knob"></i></button>' +
+        '<button class="btn big" data-go="start">Start · best of 3</button>',
     );
-    const mark = () => ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+    let agentsOn = prefs.agents;
+    const mark = () => {
+      ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+      const t = ui.querySelector('[data-agents]') as HTMLElement;
+      t.classList.toggle('on', agentsOn);
+      t.setAttribute('aria-checked', String(agentsOn));
+      (ui.querySelector('[data-go="start"]') as HTMLElement).textContent = agentsOn ? 'Pick agents' : 'Start · best of 3';
+    };
     mark();
+    ui.querySelector('[data-agents]')!.addEventListener('click', () => {
+      agentsOn = !agentsOn;
+      mark();
+    });
     ui.querySelectorAll<HTMLElement>('.mode').forEach((b) =>
       b.addEventListener('click', () => {
         mode = b.dataset.mode as Mode;
@@ -266,15 +311,116 @@ export function startApp(app: HTMLElement): void {
     ui.querySelector('.back')!.addEventListener('click', homeScreen);
     ui.querySelector('[data-go="start"]')!.addEventListener('click', () => {
       const p2 = cleanName((ui.querySelector('#p2') as HTMLInputElement).value);
-      prefs = { ...prefs, player2: p2, mode };
+      prefs = { ...prefs, player2: p2, mode, agents: agentsOn };
       savePrefs(prefs);
       names = [prefs.nickname, p2 || 'Player 2'];
-      startMatch(mode);
+      if (!agentsOn) return startMatch(mode);
+      const picks: [AgentId, AgentId] = [prefs.picks[0], prefs.picks[1]];
+      agentSelect(0, mode, picks, () => passTo(1, () => agentSelect(1, mode, picks, () => {
+        prefs = { ...prefs, picks };
+        savePrefs(prefs);
+        startMatch(mode, picks);
+      })));
     });
   }
 
+  // ---- Agents: select screen ----
+  function agentSelect(p: Player, mode: Mode, picks: [AgentId, AgentId], then: () => void): void {
+    let i = AGENT_IDS.indexOf(picks[p]);
+    let stopPreview: (() => void) | null = null;
+    let open: AbilityId | null = null;
+    show(
+      'select',
+      '<button class="back" aria-label="Back">←</button>' +
+        `<h2 class="tag ${COLORS[p]}">${esc(names[p])} · pick</h2>` +
+        '<div class="agentcard" aria-live="polite"></div>' +
+        `<div class="pickrow"><button class="arrow" data-prev aria-label="Previous agent">‹</button><div class="dots"></div><button class="arrow" data-next aria-label="Next agent">›</button></div>` +
+        '<button class="btn big lockin" data-go="lock">Lock in</button>',
+    );
+    const card = ui.querySelector('.agentcard') as HTMLElement;
+    const draw = () => {
+      stopPreview?.();
+      stopPreview = null;
+      const id = AGENT_IDS[i];
+      const a = AGENTS[id];
+      const L = AGENT_LOOK[id];
+      card.style.setProperty('--accent', L.accent);
+      card.dataset.agent = id;
+      card.innerHTML =
+        `<img class="art" alt="" src="${agentArt(id)}">` +
+        `<div class="who"><b>${a.name}</b><span class="role">${a.role}</span><span class="line">“${a.tagline}”</span></div>` +
+        `<ul class="powers">${abilitiesOf(id)
+          .map(
+            (ab) =>
+              `<li><button class="pw ${isUlt(ab) ? 'ult' : ''} ${open === ab ? 'open' : ''}" data-pw="${ab}">${abilityIcon(ab)}<b>${ABILITY_TEXT[ab].name}</b>` +
+              `<span>${isUlt(ab) ? 'ULT · ' : ''}${ABILITY_TEXT[ab].short}</span></button>` +
+              (open === ab ? `<div class="preview"><canvas width="220" height="190"></canvas><p>${abilityText(ab, mode)}</p></div>` : '') +
+              '</li>',
+          )
+          .join('')}</ul>`;
+      ui.querySelector('.pickrow .dots')!.innerHTML = AGENT_IDS.map((x, k) => `<i class="${k === i ? 'on' : ''}" style="--c:${AGENT_LOOK[x].accent}"></i>`).join('');
+      card.querySelectorAll<HTMLElement>('[data-pw]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const ab = b.dataset.pw as AbilityId;
+          open = open === ab ? null : ab;
+          draw();
+        }),
+      );
+      const cv = card.querySelector('.preview canvas') as HTMLCanvasElement | null;
+      if (cv && open) stopPreview = playPreview(cv, open, manual);
+    };
+    const step = (d: number) => {
+      i = (i + d + AGENT_IDS.length) % AGENT_IDS.length;
+      open = null;
+      draw();
+    };
+    draw();
+    ui.querySelector('[data-prev]')!.addEventListener('click', () => step(-1));
+    ui.querySelector('[data-next]')!.addEventListener('click', () => step(1));
+    let x0: number | null = null;
+    card.addEventListener('pointerdown', (e) => (x0 = e.clientX));
+    card.addEventListener('pointerup', (e) => {
+      if (x0 !== null && Math.abs(e.clientX - x0) > 50) step(e.clientX < x0 ? 1 : -1);
+      x0 = null;
+    });
+    ui.querySelector('.back')!.addEventListener('click', () => {
+      stopPreview?.();
+      localSetup();
+    });
+    ui.querySelector('[data-go="lock"]')!.addEventListener('click', () => {
+      stopPreview?.();
+      picks[p] = AGENT_IDS[i];
+      sfx.unlock();
+      sfx.stinger();
+      haptics.win();
+      splash(picks[p], 'LOCKED IN', COLORS[p], then);
+    });
+  }
+
+  /** Full-screen graffiti splash with a writer's art (lock-in and ultimates). */
+  function splash(id: AgentId, word: string, cls: string, then?: () => void): void {
+    const el = document.createElement('div');
+    el.className = `splash ${cls}`;
+    el.style.setProperty('--accent', AGENT_LOOK[id].accent);
+    el.innerHTML = `<img alt="" src="${agentArt(id)}"><b>${AGENTS[id].name}</b><span>${esc(word)}</span>`;
+    ui.appendChild(el);
+    window.setTimeout(() => {
+      el.remove();
+      then?.();
+    }, 1000);
+  }
+
+  function passTo(p: Player, then: () => void): void {
+    show(
+      'pass',
+      `<div class="card passcard"><p class="kicker">Pass the phone</p><h2 class="${COLORS[p]}">${esc(names[p])}</h2>` +
+        `<p>Your turn to pick. No peeking, ${esc(names[p === 0 ? 1 : 0])}.</p><button class="btn big" data-go="ready">I’m ${esc(names[p])}</button></div>`,
+    );
+    ui.querySelector('[data-go="ready"]')!.addEventListener('click', then);
+  }
+
   /** The how-to-play cards; `then` runs when they're closed. */
-  function help(mode: Mode, then?: () => void): void {
+  function help(mode: HelpTopic, then?: () => void): void {
     const h = HELP[mode];
     let i = 0;
     const overlay = document.createElement('div');
@@ -311,6 +457,7 @@ export function startApp(app: HTMLElement): void {
       board.attract = false;
       board.setMode(m.mode);
       board.sync(m.round.cells, crackingOf(m));
+      board.decorate(m.agents ? decorOf(m.round, m.agents) : null);
     }
     matchScreen();
     if (m.round.result) roundOver();
@@ -321,32 +468,198 @@ export function startApp(app: HTMLElement): void {
     if (!online && match) saveMatch({ match, names });
   };
 
-  function startMatch(mode: Mode): void {
+  function startMatch(mode: Mode, picks?: [AgentId, AgentId]): void {
     stopDemo();
-    match = newMatch(mode, 0);
+    match = newMatch(mode, 0, picks);
     saveMatch({ match, names });
     busy = false;
     if (board) {
       board.attract = false;
       board.setMode(mode);
       board.sync(match.round.cells);
+      board.decorate(match.agents ? decorOf(match.round, match.agents) : null);
     }
     matchScreen();
-    if (!prefs.seenHelp.includes(mode)) help(mode);
+    const agentsHelp = () => {
+      if (match?.agents && !prefs.seenHelp.includes('agents')) help('agents');
+    };
+    if (!prefs.seenHelp.includes(mode)) help(mode, agentsHelp);
+    else agentsHelp();
   }
 
   function matchScreen(): void {
     show(
       'match',
       '<button class="back" aria-label="Leave match">✕</button><button class="ask" aria-label="How to play">?</button>' +
-        `<div class="hud">${[0, 1].map((p) => `<div class="tagbox ${COLORS[p]}" data-p="${p}"><b>${esc(names[p])}</b><span class="dots"></span><span class="score"></span></div>`).join('<span class="round"></span>')}</div>` +
+        `<div class="hud">${[0, 1]
+          .map((p) => {
+            const ag = match?.agents?.picks[p];
+            const badge = ag ? `<span class="agent" style="--accent:${AGENT_LOOK[ag].accent}"><img alt="" src="${agentArt(ag, 60, 72, true)}">${AGENTS[ag].name}</span>` : '';
+            return `<div class="tagbox ${COLORS[p]}" data-p="${p}"><b>${esc(names[p])}</b>${badge}<span class="dots"></span><span class="score"></span></div>`;
+          })
+          .join('<span class="round"></span>')}</div>` +
+        (match?.agents ? '<div class="abilities" role="toolbar" aria-label="Powers"></div>' : '') +
         '<p class="turn"></p>',
     );
     ui.querySelector('.back')!.addEventListener('click', () => {
       if (online ? confirm('Leave the room? The match ends.') : true) homeScreen();
     });
-    ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode));
+    ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode, () => match?.agents && help('agents')));
     updateHud();
+  }
+
+  // ---- Agents: the ability bar and targeting ----
+  function renderAbilities(): void {
+    const bar = ui.querySelector('.abilities') as HTMLElement | null;
+    if (!bar || !match?.agents) return;
+    const r = match.round;
+    const p = r.turn;
+    const agent = match.agents.picks[p];
+    const st = abilityStatus(r, match.agents, p);
+    bar.className = `abilities ${COLORS[p]}`;
+    bar.style.setProperty('--accent', AGENT_LOOK[agent].accent);
+    bar.hidden = !!r.result;
+    bar.innerHTML = st
+      .map((a) => {
+        const off = !!a.blocked || busy;
+        const badge = a.ult
+          ? `<span class="meter" style="--f:${Math.min(1, a.pips / a.cost)}"></span><em>${a.pips >= a.cost ? 'READY' : `${a.pips}/${a.cost}`}</em>`
+          : a.cooldown > 0
+            ? `<em class="cd">${a.cooldown}</em>`
+            : '';
+        return (
+          `<button class="ab ${a.ult ? 'ult' : ''} ${off ? 'off' : ''} ${targeting?.id === a.id ? 'on' : ''} ${match!.agents!.used === a.id ? 'used' : ''}" data-ab="${a.id}" ` +
+          `aria-label="${ABILITY_TEXT[a.id].name}${a.cooldown ? `, ready in ${a.cooldown}` : ''}${a.ult ? `, ${a.pips} of ${a.cost}` : ''}">` +
+          `${abilityIcon(a.id)}<b>${ABILITY_TEXT[a.id].name}</b>${badge}</button>`
+        );
+      })
+      .join('');
+    bar.querySelectorAll<HTMLElement>('[data-ab]').forEach((b) => b.addEventListener('click', () => onAbility(b.dataset.ab as AbilityId)));
+  }
+
+  function hint(text: string | null, withCancel = true): void {
+    ui.querySelector('.hint')?.remove();
+    if (!text) return;
+    const el = document.createElement('div');
+    el.className = 'hint';
+    el.innerHTML = `<span>${text}</span>${withCancel ? '<button class="x" aria-label="Cancel power">✕</button>' : ''}`;
+    ui.querySelector('.screen')?.appendChild(el);
+    el.querySelector('.x')?.addEventListener('click', () => cancelTargeting());
+  }
+
+  function cancelTargeting(redraw = true): void {
+    if (!targeting) return;
+    targeting = null;
+    board?.highlight(null);
+    hint(null);
+    ui.querySelector('.confirm')?.remove();
+    void board?.cancelTwist();
+    if (redraw) updateHud();
+  }
+
+  /** The uses still possible after the cells picked so far. */
+  function consistent(t: NonNullable<typeof targeting>): AbilityUse[] {
+    if (t.id === 'wetFloor') return t.uses.filter((u) => t.picked.every((c) => LINES[lineThrough(u.cells![0], u.cells![1])].includes(c)));
+    return t.uses.filter((u) => t.picked.every((c, k) => u.cells![k] === c));
+  }
+  function candidates(t: NonNullable<typeof targeting>): number[] {
+    const us = consistent(t);
+    if (t.id === 'wetFloor') return [...new Set(us.flatMap((u) => [...LINES[lineThrough(u.cells![0], u.cells![1])]]))].filter((c) => !t.picked.includes(c));
+    return [...new Set(us.map((u) => u.cells![t.picked.length]).filter((c) => c !== undefined))];
+  }
+
+  function onAbility(id: AbilityId): void {
+    if (!match?.agents || !board || screen !== 'match' || busy || match.round.result) return;
+    if (targeting?.id === id) return cancelTargeting();
+    cancelTargeting(false);
+    const why = abilityBlocked(match.round, match.agents, id);
+    if (why) {
+      toast(REASONS[why] ?? 'Not now.');
+      updateHud();
+      return;
+    }
+    const uses = abilityUses(match.round, match.agents, id);
+    targeting = { id, uses, picked: [], twists: [] };
+    const name = ABILITY_TEXT[id].name;
+    const color = PLAYER_COLORS_CSS[match.round.turn];
+    if (uses.every((u) => !u.cells?.length && !u.twists?.length)) {
+      confirmUse(uses[0], `✓ ${name}`);
+      hint(`${name}: ${ABILITY_TEXT[id].short.toLowerCase()}`);
+    } else if (uses[0].twists?.length) {
+      board.twistEnabled = true;
+      hint(id === 'flip' ? 'Flip: swipe the first layer' : `${name}: swipe a layer to turn it`);
+    } else {
+      board.highlight(candidates(targeting), color);
+      const what: Partial<Record<AbilityId, string>> = {
+        shove: 'tap an enemy mark, then where it goes',
+        swap: 'tap your mark, then the enemy mark next to it',
+        wetFloor: 'tap cells of the line to block',
+        fixative: 'tap your mark to seal',
+        overspray: 'tap an enemy mark',
+      };
+      hint(`${name}: ${what[id] ?? 'tap a glowing cell'}`);
+    }
+    updateHud();
+  }
+
+  function targetTap(cell: number): void {
+    const t = targeting!;
+    if (t.uses[0].twists?.length && !t.uses[0].cells?.length) return; // Spin/Flip use swipes
+    const cand = candidates(t);
+    let c = cell;
+    if (!cand.includes(c) && match!.mode === 'cascade') c = cand.find((x) => x % 9 === cell % 9) ?? cell;
+    if (!cand.includes(c)) {
+      board?.refuse(cell);
+      toast('Pick a glowing cell.');
+      return;
+    }
+    t.picked.push(c);
+    const left = consistent(t);
+    const done = t.id === 'wetFloor' ? left.length === 1 : left.length === 1 && left[0].cells!.length === t.picked.length;
+    if (done) {
+      void doAbility(left[0]);
+      return;
+    }
+    board?.highlight(candidates(t), PLAYER_COLORS_CSS[match!.round.turn]);
+  }
+
+  function confirmUse(use: AbilityUse, label: string): void {
+    ui.querySelector('.confirm')?.remove();
+    const bar = document.createElement('div');
+    bar.className = 'confirm';
+    bar.innerHTML = `<button class="btn" data-ok>${esc(label)}</button><button class="btn alt" data-no aria-label="Cancel">✕</button>`;
+    ui.querySelector('.screen')?.appendChild(bar);
+    bar.querySelector('[data-ok]')!.addEventListener('click', () => {
+      bar.remove();
+      void doAbility(use);
+    });
+    bar.querySelector('[data-no]')!.addEventListener('click', () => {
+      bar.remove();
+      cancelTargeting();
+    });
+  }
+
+  async function doAbility(use: AbilityUse): Promise<void> {
+    if (!match?.agents || !board || busy || checkMove(match, use)) return;
+    const p = match.round.turn;
+    const agent = match.agents.picks[p];
+    targeting = null;
+    board.highlight(null);
+    hint(null);
+    ui.querySelector('.confirm')?.remove();
+    busy = true;
+    board.twistEnabled = false;
+    board.setTurn(null);
+    const out = applyMove(match, use);
+    match = out.state;
+    persist();
+    renderAbilities();
+    if (isUlt(use.id)) splash(agent, ABILITY_TEXT[use.id].name.toUpperCase(), COLORS[p]);
+    await board.play(out.events);
+    busy = false;
+    board.decorate(decorOf(match.round, match.agents!));
+    updateHud();
+    if (match.round.result) roundOver();
   }
 
   function updateHud(): void {
@@ -361,7 +674,11 @@ export function startApp(app: HTMLElement): void {
     (ui.querySelector('.round') as HTMLElement).textContent = `R${match.roundNumber}`;
     const turn = ui.querySelector('.turn') as HTMLElement;
     turn.className = `turn ${COLORS[r.turn]}`;
-    const how = r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop';
+    const how = match.agents
+      ? r.mode === 'rotating'
+        ? match.agents.used ? 'now paint or twist' : 'paint, twist or a power'
+        : match.agents.used ? 'now drop' : 'drop or use a power'
+      : r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop';
     if (r.result) turn.textContent = '';
     else if (!online) turn.textContent = `${names[r.turn]} · ${how}`;
     else {
@@ -379,8 +696,9 @@ export function startApp(app: HTMLElement): void {
       }
       away.textContent = `${names[online.me === 0 ? 1 : 0]} dropped · waiting ${view.awayLeft}s`;
     } else away?.remove();
+    if (match.agents) renderAbilities();
     if (board) {
-      board.twistEnabled = r.mode === 'rotating' && !r.result && !busy && !awaiting && isMyTurn();
+      board.twistEnabled = (r.mode === 'rotating' || (targeting?.uses[0].twists?.length ?? 0) > 0) && !r.result && !busy && !awaiting && isMyTurn();
       board.setTurn(r.result || busy || !isMyTurn() ? null : r.turn);
       board.names = [names[0], names[1]];
     }
@@ -392,7 +710,7 @@ export function startApp(app: HTMLElement): void {
 
   /** Aim marker: the cell a tap would paint (Cascade: where the drop lands), if legal. */
   function aimAt(cell: number): number | null {
-    if (!match || screen !== 'match' || busy || awaiting || match.round.result || !isMyTurn()) return null;
+    if (!match || screen !== 'match' || busy || awaiting || match.round.result || !isMyTurn() || targeting) return null;
     const r = match.round;
     if (r.mode === 'rotating') return checkMove(match, { kind: 'place', cell }) ? null : cell;
     const column = coord(cell)[0] + 3 * coord(cell)[1];
@@ -402,6 +720,12 @@ export function startApp(app: HTMLElement): void {
   // Twists: a swipe on the cube asks first, then holds a preview until confirmed.
   function onTwistIntent(t: Twist): boolean {
     if (!match || screen !== 'match' || busy || awaiting || match.round.result) return false;
+    if (targeting) {
+      const tg = targeting;
+      const ok = tg.uses.some((u) => u.twists && JSON.stringify(u.twists[tg.twists.length]) === JSON.stringify(t));
+      if (!ok) toast(REASONS.sealed && tg.id === 'spin' ? 'That layer can’t spin.' : 'Not that layer.');
+      return ok;
+    }
     if (!isMyTurn()) {
       toast(`${names[match.round.turn]}'s turn.`);
       return false;
@@ -414,6 +738,35 @@ export function startApp(app: HTMLElement): void {
     return true;
   }
   function onTwistReady(t: Twist): void {
+    if (targeting) {
+      const tg = targeting;
+      const twists = [...tg.twists, t];
+      const need = tg.uses[0].twists!.length;
+      const label = need > twists.length ? '✓ 1st layer' : `✓ ${ABILITY_TEXT[tg.id].name}`;
+      const bar = document.createElement('div');
+      bar.className = 'confirm';
+      bar.innerHTML = `<button class="btn" data-ok>${label}</button><button class="btn alt" data-no aria-label="Cancel">✕</button>`;
+      ui.querySelector('.confirm')?.remove();
+      ui.querySelector('.screen')?.appendChild(bar);
+      bar.querySelector('[data-ok]')!.addEventListener('click', () => {
+        bar.remove();
+        if (twists.length < need) {
+          tg.twists = twists;
+          void board?.cancelTwist();
+          hint('Flip: now swipe the second layer');
+          return;
+        }
+        if (need > 1) void board?.cancelTwist();
+        const use = tg.uses.find((u) => JSON.stringify(u.twists) === JSON.stringify(twists));
+        if (use) void doAbility(use);
+        else cancelTargeting();
+      });
+      bar.querySelector('[data-no]')!.addEventListener('click', () => {
+        bar.remove();
+        void board?.cancelTwist();
+      });
+      return;
+    }
     const bar = document.createElement('div');
     bar.className = 'confirm';
     bar.innerHTML = '<button class="btn" data-ok>✓ Twist</button><button class="btn alt" data-no aria-label="Cancel twist">✕</button>';
@@ -436,9 +789,14 @@ export function startApp(app: HTMLElement): void {
 
   async function onTap(cell: number): Promise<void> {
     if (!match || !board || screen !== 'match' || busy || awaiting || match.round.result) return;
+    if (targeting) return targetTap(cell);
     if (!isMyTurn()) {
       board.refuse(cell);
       toast(`${names[match.round.turn]}'s turn.`);
+      return;
+    }
+    if (match.agents && legalMoves(match)[0]?.kind === 'pass') {
+      await doMove({ kind: 'pass' });
       return;
     }
     const move: Move = match.round.mode === 'rotating' ? { kind: 'place', cell } : { kind: 'drop', column: coord(cell)[0] + 3 * coord(cell)[1] };
@@ -479,6 +837,7 @@ export function startApp(app: HTMLElement): void {
     if (turnEl) turnEl.textContent = '';
     await board.play(out.events);
     busy = false;
+    if (match.agents) board.decorate(decorOf(match.round, match.agents));
     updateHud();
     if (match.round.result) roundOver();
   }
@@ -511,10 +870,11 @@ export function startApp(app: HTMLElement): void {
       match = nextRound(match!);
       persist();
       board?.sync(match.round.cells);
+      board?.decorate(match.agents ? decorOf(match.round, match.agents) : null);
       overlay.remove();
       updateHud();
     });
-    overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode));
+    overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode, match!.agents?.picks));
     overlay.querySelector('[data-go="home"]')?.addEventListener('click', homeScreen);
   }
 
@@ -711,6 +1071,7 @@ export function startApp(app: HTMLElement): void {
       board.onTwistIntent = onTwistIntent;
       board.onTwistReady = onTwistReady;
       board.aimAt = aimAt;
+      board.abilityName = (id) => ABILITY_TEXT[id].name;
       root.dataset.threeD = 'ok';
     })
     .catch((e) => {
