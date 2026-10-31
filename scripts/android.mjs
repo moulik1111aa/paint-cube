@@ -8,7 +8,7 @@
 //
 // Env: PAINTCUBE_VERSION_CODE (default: GITHUB_RUN_NUMBER, or 1 locally).
 import { execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,7 +35,14 @@ const android = join(root, 'android');
 rmSync(android, { recursive: true, force: true });
 run('npx cap add android');
 
-// 3. Manifest: portrait only, and vibration for haptics.
+// 3. Resources: our icon (legacy + adaptive) and splash replace the template's.
+const res = join(android, 'app/src/main/res');
+for (const dir of readdirSync(res)) {
+  if (dir.startsWith('drawable')) rmSync(join(res, dir, 'splash.png'), { force: true });
+}
+cpSync(join(root, 'native/android/res'), res, { recursive: true });
+
+// 4. Manifest: portrait only, and vibration for haptics.
 const manifestPath = join(android, 'app/src/main/AndroidManifest.xml');
 let manifest = readFileSync(manifestPath, 'utf8');
 manifest = patch(manifest, 'android:name=".MainActivity"', 'android:name=".MainActivity"\n            android:screenOrientation="portrait"');
@@ -46,7 +53,7 @@ manifest = patch(
 );
 writeFileSync(manifestPath, manifest);
 
-// 4. Gradle: version and release signing (from CI secrets).
+// 5. Gradle: version and release signing (from CI secrets).
 const gradlePath = join(android, 'app/build.gradle');
 const gradle = readFileSync(gradlePath, 'utf8');
 if (!gradle.includes(`applicationId "${config.appId}"`)) throw new Error('app/build.gradle: applicationId not set by the template');
@@ -81,7 +88,7 @@ android {
 `,
 );
 
-// 5. Copy the web assets and config into the native project.
+// 6. Copy the web assets and config into the native project.
 run('npx cap sync android');
 console.log(`android/ ready: ${config.appId} ${versionName}`);
 

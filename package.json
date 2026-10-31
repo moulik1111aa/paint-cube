@@ -13,7 +13,8 @@
     "e2e": "playwright test",
     "check": "npm run typecheck && npm test && npm run build && npm run e2e",
     "android": "node scripts/android.mjs",
-    "simulate": "node scripts/simulate.ts"
+    "simulate": "node scripts/simulate.ts",
+    "icons": "node scripts/icons.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

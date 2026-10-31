@@ -9,10 +9,12 @@ export interface Prefs {
   player2: string;
   mode: Mode;
   sound: boolean;
+  /** Modes whose how-to-play cards have been shown. */
+  seenHelp: Mode[];
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [] };
 
 export function loadPrefs(): Prefs {
   try {
@@ -24,6 +26,7 @@ export function loadPrefs(): Prefs {
       player2: typeof p.player2 === 'string' ? p.player2 : '',
       mode: p.mode === 'cascade' ? 'cascade' : 'rotating',
       sound: p.sound !== false,
+      seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is Mode => m === 'rotating' || m === 'cascade') : [],
     };
   } catch {
     return { ...DEFAULTS };

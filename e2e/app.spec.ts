@@ -36,6 +36,12 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await page.fill('#p2', 'Riya');
   await page.click('[data-mode="rotating"]');
   await page.click('[data-go="start"]');
+  // First Twist match: the how-to-play cards come up; read one, skip the rest.
+  await expect(page.locator('.help h2')).toHaveText('Spray a cell');
+  await page.click('.help [data-next]');
+  await expect(page.locator('.help h2')).toHaveText('Only 3 marks');
+  await page.click('.help [data-skip]');
+  await expect(page.locator('.help')).toHaveCount(0);
   await expect(page.locator('.tagbox.p1 b')).toHaveText('Akshat');
   await expect(page.locator('.tagbox.p2 b')).toHaveText('Riya');
   await expect(page.locator('.tagbox.p1')).toHaveClass(/active/);
@@ -65,9 +71,18 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await page.click('[data-go="local"]');
   await page.click('[data-mode="cascade"]');
   await page.click('[data-go="start"]');
+  await page.click('.help [data-skip]');
   for (const c of [0, 3, 1, 4, 2]) await tap(page, c);
   await expect(page.locator('.tagbox.p1 .score')).toHaveText('1 pts');
   expect(await page.evaluate(() => window.__game!.state()!.round.cells.slice(0, 3))).toEqual([null, null, null]);
+
+  // Back leaves the match (after asking), and the help is not shown again.
+  await page.goBack();
+  await expect(page.locator('.hello')).toContainText('Akshat');
+  await page.click('[data-go="local"]');
+  await page.click('[data-mode="cascade"]');
+  await page.click('[data-go="start"]');
+  await expect(page.locator('.help')).toHaveCount(0);
 
   // Reload: the nickname is remembered.
   await page.reload();
@@ -80,7 +95,7 @@ test('twisting: swipe, confirm, refused when you twisted last turn, cancel chang
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: 'Riya', mode: 'rotating', sound: false })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="local"]');
@@ -120,7 +135,7 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: '', mode: 'rotating', sound: false })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: '', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual&memrelay');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="online"]');

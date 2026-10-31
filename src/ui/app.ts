@@ -38,6 +38,28 @@ declare global {
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const COLORS = ['p1', 'p2'] as const;
 
+/** How to play, per mode: short cards, one idea each. */
+const HELP: Record<Mode, { title: string; cards: [string, string][] }> = {
+  rotating: {
+    title: 'Twist',
+    cards: [
+      ['Spray a cell', 'Tap any cell to paint it. Get 3 in a row in any direction: across a face, through the layers, or corner to corner.'],
+      ['Only 3 marks', 'You can hold 3 marks. Paint a 4th and your oldest fades away. It dries out and cracks first, so you can see it coming.'],
+      ['Or twist a layer', 'Swipe across the cube to turn a layer, then tap ✓. Everything on it moves. No twisting twice in a row, and no undoing the last twist.'],
+      ['The Core', 'The glowing middle cell can never be painted. Best of 3 rounds, and the starter swaps each round.'],
+    ],
+  },
+  cascade: {
+    title: 'Cascade',
+    cards: [
+      ['Drop paint', 'Tap a column to drop your paint. It lands on the lowest free cell.'],
+      ['Lines burst', 'Three in a row in any direction scores a point. The line bursts and everything above it falls.'],
+      ['Chain combos', 'Falling paint can finish more lines: wave 2 scores 2 each, wave 3 scores 3. Careful, a fall can finish their lines too.'],
+      ['First to 5', 'First to 5 points takes the round. Best of 3, and the starter swaps each round.'],
+    ],
+  },
+};
+
 const REASONS: Partial<Record<IllegalReason, string>> = {
   core: "That's the Core. Nobody can paint it.",
   'not-your-turn': 'Not your turn yet.',
@@ -122,7 +144,41 @@ export function startApp(app: HTMLElement): void {
   }
 
   // ---- screens ----
+  // Android back: while off the home screen we keep one history entry, so back
+  // comes here instead of closing the app. In a match it asks first.
+  let deep = false;
+  const HOMEISH = new Set(['home', 'nickname', 'loading']);
+  window.addEventListener('popstate', () => {
+    deep = false;
+    const helpOpen = ui.querySelector('.help');
+    if (helpOpen) {
+      helpOpen.remove();
+      enterDeep();
+      return;
+    }
+    if (screen === 'match' && !confirm(online ? 'Leave the room? The match ends.' : 'Leave this match?')) {
+      enterDeep();
+      return;
+    }
+    if (!HOMEISH.has(screen)) homeScreen();
+  });
+  function enterDeep(): void {
+    if (deep) return;
+    deep = true;
+    try {
+      history.pushState({ paintcube: 'deep' }, '');
+    } catch {
+      /* history unavailable */
+    }
+  }
+
   function show(name: string, html: string): void {
+    if (!HOMEISH.has(name)) enterDeep();
+    else if (deep) {
+      // Leaving to home from a button: drop our extra entry quietly.
+      deep = false;
+      history.back();
+    }
     screen = name;
     ui.innerHTML = `<div class="screen ${name}">${html}</div>`;
   }
@@ -204,6 +260,36 @@ export function startApp(app: HTMLElement): void {
     });
   }
 
+  /** The how-to-play cards; `then` runs when they're closed. */
+  function help(mode: Mode, then?: () => void): void {
+    const h = HELP[mode];
+    let i = 0;
+    const overlay = document.createElement('div');
+    overlay.className = 'help';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-label', `How to play ${h.title}`);
+    const draw = () => {
+      const [t, body] = h.cards[i];
+      overlay.innerHTML =
+        `<div class="sheet"><p class="kicker">How to play · ${h.title}</p><h2>${t}</h2><p>${body}</p>` +
+        `<div class="pips">${h.cards.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>` +
+        `<div class="row"><button class="link" data-skip>${i < h.cards.length - 1 ? 'Skip' : ''}</button>` +
+        `<button class="btn" data-next>${i < h.cards.length - 1 ? 'Next' : "Let's play"}</button></div></div>`;
+      overlay.querySelector('[data-next]')!.addEventListener('click', () => (i < h.cards.length - 1 ? (i++, draw()) : close()));
+      overlay.querySelector('[data-skip]')!.addEventListener('click', close);
+    };
+    const close = () => {
+      overlay.remove();
+      if (!prefs.seenHelp.includes(mode)) {
+        prefs = { ...prefs, seenHelp: [...prefs.seenHelp, mode] };
+        savePrefs(prefs);
+      }
+      then?.();
+    };
+    draw();
+    ui.appendChild(overlay);
+  }
+
   function startMatch(mode: Mode): void {
     stopDemo();
     match = newMatch(mode, 0);
@@ -214,18 +300,20 @@ export function startApp(app: HTMLElement): void {
       board.sync(match.round.cells);
     }
     matchScreen();
+    if (!prefs.seenHelp.includes(mode)) help(mode);
   }
 
   function matchScreen(): void {
     show(
       'match',
-      '<button class="back" aria-label="Leave match">✕</button>' +
+      '<button class="back" aria-label="Leave match">✕</button><button class="ask" aria-label="How to play">?</button>' +
         `<div class="hud">${[0, 1].map((p) => `<div class="tagbox ${COLORS[p]}" data-p="${p}"><b>${esc(names[p])}</b><span class="dots"></span><span class="score"></span></div>`).join('<span class="round"></span>')}</div>` +
         '<p class="turn"></p>',
     );
     ui.querySelector('.back')!.addEventListener('click', () => {
       if (confirm(online ? 'Leave the room? The match ends.' : 'Leave this match?')) homeScreen();
     });
+    ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode));
     updateHud();
   }
 
@@ -509,6 +597,7 @@ export function startApp(app: HTMLElement): void {
       board?.sync(match.round.cells);
       shown = JSON.stringify(match.round.cells);
       matchScreen();
+      if (!prefs.seenHelp.includes(match.mode)) help(match.mode);
       return;
     }
     const next = v.match;
