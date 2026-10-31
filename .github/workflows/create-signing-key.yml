@@ -1,0 +1,69 @@
+# One-time setup: creates the release signing key, encrypted with the
+# PAINTCUBE_SIGNING_PASSWORD repository secret, and commits it with its certificate
+# fingerprint. Run it once from Actions → Create signing key → Run workflow.
+#
+# Every APK update must be signed with this same key, or Android refuses to install
+# it over the previous version, so this workflow refuses to replace an existing key.
+name: Create signing key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the signing secret
+        env:
+          PW: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+        run: |
+          if [ ${#PW} -lt 12 ]; then
+            echo "::error::Add a PAINTCUBE_SIGNING_PASSWORD repository secret (at least 12 characters) under Settings → Secrets and variables → Actions, then run this again."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Refuse to replace an existing key
+        run: |
+          if [ -e native/android/paintcube-release.jks.gpg ]; then
+            echo "::error::A signing key already exists. Replacing it would stop updates installing over the current app."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Generate, fingerprint and encrypt the key
+        env:
+          PW: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/paintcube-release.jks"
+          keytool -genkeypair -keystore "$KS" -storetype PKCS12 -alias paintcube \
+            -keyalg RSA -keysize 4096 -validity 36500 \
+            -storepass "$PW" -keypass "$PW" -dname "CN=Paint Cube, O=Paint Cube"
+          mkdir -p native/android
+          keytool -list -v -keystore "$KS" -storepass "$PW" -alias paintcube \
+            | grep -m1 'SHA256:' | sed 's/.*SHA256: *//' | tr -d ':' | tr 'A-F' 'a-f' \
+            > native/android/paintcube-cert.sha256
+          test -s native/android/paintcube-cert.sha256
+          printf '%s' "$PW" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 \
+            --symmetric --cipher-algo AES256 --output native/android/paintcube-release.jks.gpg "$KS"
+          rm -f "$KS"
+          echo "Certificate SHA-256: $(cat native/android/paintcube-cert.sha256)"
+
+      - name: Commit the encrypted key
+        run: |
+          git config user.name "Paint Cube CI"
+          git config user.email "ci@users.noreply.github.com"
+          git add native/android/paintcube-release.jks.gpg native/android/paintcube-cert.sha256
+          git commit -m "Add the release signing key (encrypted) and its fingerprint"
+          git push
+          echo "### Signing key created" >> "$GITHUB_STEP_SUMMARY"
+          echo "Now run **Build APK** (Actions → Build APK → Run workflow), or push any change to main." >> "$GITHUB_STEP_SUMMARY"

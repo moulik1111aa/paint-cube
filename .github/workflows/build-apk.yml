@@ -1,0 +1,152 @@
+# Builds the signed Paint Cube APK on every push to main and publishes it as a GitHub
+# Release. Adapted from Study Hard's workflow. The newest APK is always at:
+#   https://github.com/<owner>/<repo>/releases/latest/download/PaintCube.apk
+#
+# Signing: native/android/paintcube-release.jks.gpg is the release keystore, encrypted
+# with the PAINTCUBE_SIGNING_PASSWORD repository secret (also the keystore password),
+# and native/android/paintcube-cert.sha256 is its certificate fingerprint. Both are made
+# once by the "Create signing key" workflow. Every update must be signed with this key,
+# or Android refuses to install it over the previous version.
+#
+# Build logs for whoever is working on the app are pushed to the `ci-results` branch
+# when something fails, since workflow logs are not always reachable from where the
+# code is written.
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', 'README.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: false
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check the signing secret
+        env:
+          PW: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$PW" ]; then
+            echo "::error::The PAINTCUBE_SIGNING_PASSWORD secret is missing. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Check the signing key exists
+        run: |
+          if [ ! -s native/android/paintcube-release.jks.gpg ] || [ ! -s native/android/paintcube-cert.sha256 ]; then
+            echo "::error::No signing key yet. Run Actions → Create signing key → Run workflow once."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install
+        run: npm install --no-audit --no-fund 2>&1 | tee -a ci.log
+
+      - name: Type-check and unit tests
+        run: |
+          set -o pipefail
+          { npm run typecheck && npm test; } 2>&1 | tee -a ci.log
+
+      - name: Build the app
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee -a ci.log
+
+      - name: Generate the Android project
+        run: |
+          set -o pipefail
+          node scripts/android.mjs 2>&1 | tee -a ci.log
+
+      - name: Unlock the signing key
+        env:
+          PW: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+        run: |
+          printf '%s' "$PW" | gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-fd 0 \
+            --output "$RUNNER_TEMP/paintcube-release.jks" --decrypt native/android/paintcube-release.jks.gpg
+
+      - name: Build the signed APK
+        working-directory: android
+        env:
+          PAINTCUBE_KEYSTORE: ${{ runner.temp }}/paintcube-release.jks
+          PAINTCUBE_KEYSTORE_PASSWORD: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+          PAINTCUBE_KEY_ALIAS: paintcube
+          PAINTCUBE_KEY_PASSWORD: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee -a ../ci.log
+
+      - name: Verify the signature
+        run: |
+          rm -f "$RUNNER_TEMP/paintcube-release.jks"
+          CERT_SHA256=$(tr -d '[:space:]' < native/android/paintcube-cert.sha256)
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee signature.txt
+          grep -qi "certificate SHA-256 digest: $CERT_SHA256" signature.txt || { echo "::error::APK is not signed with the Paint Cube release key"; exit 1; }
+          cp "$APK" PaintCube.apk
+          ls -l PaintCube.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: PaintCube.apk
+          retention-days: 14
+
+      - name: Share the build log if something failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ci-results && tail -n 400 ci.log > ci-results/build-log.txt 2>/dev/null || true
+          bash scripts/push-ci-results.sh "Build ${{ github.run_number }} failed"
+
+  release:
+    needs: apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          CODE=$GITHUB_RUN_NUMBER   # same version code as scripts/android.mjs
+          TAG="v$V-build.$CODE"
+          {
+            echo "**Paint Cube $V, build $CODE**"
+            echo
+            echo "$(git log -1 --pretty=%s)"
+            echo
+            echo "Install: download **PaintCube.apk** below on your phone and open it. Updates install over the old version."
+          } > notes.md
+          gh release create "$TAG" PaintCube.apk --title "Paint Cube $V (build $CODE)" --notes-file notes.md --latest
