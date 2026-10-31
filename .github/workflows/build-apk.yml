@@ -34,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - uses: actions/checkout@v4
+
       - name: Check the signing secret
         env:
           PW: ${{ secrets.PAINTCUBE_SIGNING_PASSWORD }}
@@ -42,8 +44,6 @@ jobs:
             echo "::error::The PAINTCUBE_SIGNING_PASSWORD secret is missing. Add it under Settings → Secrets and variables → Actions."
             exit 1
           fi
-
-      - uses: actions/checkout@v4
 
       - name: Check the signing key exists
         run: |
