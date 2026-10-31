@@ -18,10 +18,12 @@ export interface Prefs {
   agents: boolean;
   /** The last agents each player picked (the select screen starts there). */
   picks: [AgentId, AgentId];
+  /** Read the tutorials aloud. */
+  voice: boolean;
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'] };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -36,6 +38,7 @@ export function loadPrefs(): Prefs {
       sound: p.sound !== false,
       seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is HelpTopic => m === 'rotating' || m === 'cascade' || m === 'agents') : [],
       agents: p.agents === true,
+      voice: p.voice !== false,
       picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],
     };
   } catch {

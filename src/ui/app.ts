@@ -18,11 +18,13 @@ import { rng } from '../core/rng.ts';
 import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type HelpTopic, type Prefs } from '../storage/prefs.ts';
 import {
   AGENTS, AGENT_IDS, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
-  type AbilityId, type AbilityUse, type AgentId,
+  type AbilityId, type AbilityUse, type AgentId, type AgentsState, type AgentRound,
 } from '../core/agents.ts';
 import { LINES } from '../core/geometry.ts';
 import { ABILITY_TEXT, AGENT_LOOK, abilityIcon, abilityText, agentArt, playPreview } from './agents-ui.ts';
 import { haptics } from '../platform/haptics.ts';
+import { voice } from '../platform/voice.ts';
+import { ALL_TOPICS, abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, type Lesson, type Topic } from './lessons.ts';
 import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
 import { connectFirebase } from '../net/firebase.ts';
 import { FIREBASE } from '../net/config.ts';
@@ -40,6 +42,7 @@ declare global {
       aim: (cell: number | null) => void;
       advance: (sec: number, draw?: boolean) => void;
       state: () => MatchState | null;
+      lesson: () => boolean;
     };
   }
 }
@@ -49,14 +52,14 @@ const COLORS = ['p1', 'p2'] as const;
 const PLAYER_COLORS_CSS = ['#ff7a1a', '#1aa3ff'];
 
 /** How to play, per mode (and for Agents): short cards, one idea each. */
-const HELP: Record<HelpTopic, { title: string; cards: [string, string][] }> = {
+const HELP: Record<HelpTopic, { title: string; cards: [string, string, Topic?][] }> = {
   agents: {
     title: 'Agents',
     cards: [
-      ['Powers', 'Each writer has 3 powers and an ultimate. On your turn use ONE of them (tap it, then tap a target), then make your normal move.'],
-      ['Timers', 'A used power cools down: the number on it is how many of your turns until it’s back. Some only unlock later in a round. Every round starts fresh.'],
-      ['Wet paint', 'Paint a power puts down or moves is wet (it drips), and so is your move after Shove, Overspray, Spin or Fixative. A line with wet paint only counts once it dries, a couple of its owner’s turns later, if it’s still there. So the other side always gets a reply.'],
-      ['Ultimate', 'The ring fills a little every turn, and faster when you’re losing. When it’s full, your ultimate is ready. Ultimates aren’t wet: they hit straight away.'],
+      ['Using a power', 'Your writer has 3 powers and an ultimate, in the bar at the bottom. On your turn: tap a power, tap a glowing cell, then make your normal move.', 'powers'],
+      ['Wet paint', 'Paint from a power drips: it’s wet. A row with wet paint doesn’t count straight away. It counts once it dries, a couple of turns later, if it’s still whole. So the other player always gets a chance to answer.', 'wet'],
+      ['Timers', 'After you use a power, a number shows on it: how many of your turns until it’s back. Every round starts fresh.', 'timers'],
+      ['Ultimate', 'The last button’s ring fills every turn. When it says READY, fire it. Ultimates hit straight away: they’re never wet.', 'ult'],
     ],
   },
   rotating: {
@@ -109,11 +112,14 @@ export function startApp(app: HTMLElement): void {
   let prefs: Prefs = loadPrefs();
   sfx.enabled = prefs.sound;
   haptics.enabled = prefs.sound;
+  voice.enabled = prefs.voice;
   let board: Board | null = null;
   let screen = 'loading';
   let match: MatchState | null = null;
   let names: [string, string] = ['Player 1', 'Player 2'];
   let busy = false;
+  /** A show-me lesson is playing on the cube (the game's input is paused). */
+  let lessonOn: (() => void) | null = null;
   /** Agents mode: the power being aimed (cells picked so far, twists for Spin/Flip). */
   let targeting: { id: AbilityId; uses: AbilityUse[]; picked: number[]; twists: Twist[] } | null = null;
   // Online: the session, its latest view, and animation bookkeeping.
@@ -182,6 +188,17 @@ export function startApp(app: HTMLElement): void {
   const HOMEISH = new Set(['home', 'nickname', 'loading']);
   window.addEventListener('popstate', () => {
     deep = false;
+    if (lessonOn) {
+      lessonOn();
+      enterDeep();
+      return;
+    }
+    const reviewOpen = ui.querySelector('.review');
+    if (reviewOpen) {
+      reviewOpen.remove();
+      enterDeep();
+      return;
+    }
     const helpOpen = ui.querySelector('.help');
     if (helpOpen) {
       helpOpen.remove();
@@ -253,7 +270,8 @@ export function startApp(app: HTMLElement): void {
           ? '<button class="btn big alt" data-go="online">Play online</button></div>'
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
-        `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button></div>` +
+        `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button>` +
+        `<button class="link" data-go="voice">Voice: ${prefs.voice ? 'on' : 'off'}</button></div>` +
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
     void leaveOnline();
@@ -271,6 +289,10 @@ export function startApp(app: HTMLElement): void {
       toast(s ? `3D: ${s.ratio.toFixed(2)}x sharpness · ${s.fps || '…'} fps · quality ${s.levels - s.level}/${s.levels}` : '3D is still loading');
     });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
+    ui.querySelector('[data-go="voice"]')!.addEventListener('click', () => {
+      setVoice(!prefs.voice);
+      homeScreen();
+    });
     ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
       prefs = { ...prefs, sound: !prefs.sound };
       sfx.enabled = prefs.sound;
@@ -329,6 +351,216 @@ export function startApp(app: HTMLElement): void {
     });
   }
 
+  // ---- Show-me lessons: scripted plays on the real cube, narrated ----
+  const sleep = (sec: number) => new Promise<void>((res) => window.setTimeout(res, manual ? 0 : sec * 1000));
+
+  /** The full Agents tutorial: every idea, each shown on the cube. */
+  function agentsTutorial(then?: () => void): void {
+    runLessons(ALL_TOPICS.map(topicLesson), () => then?.());
+  }
+
+  /**
+   * Play lessons one after another over the current screen (which is hidden meanwhile),
+   * then put the board back as it was and run `back`.
+   */
+  function runLessons(lessons: Lesson[], back: () => void): void {
+    if (!board || lessons.length === 0) return back();
+    const b = board;
+    const wasMatch = screen === 'match' && match ? match : null;
+    cancelTargeting(false);
+    stopDemo();
+    b.attract = false;
+    b.twistEnabled = false;
+    b.setTurn(null);
+    voice.stop();
+    ui.classList.add('lessoning');
+    const el = document.createElement('div');
+    el.className = 'lesson';
+    el.setAttribute('role', 'dialog');
+    ui.appendChild(el);
+    let token = 0;
+    let li = 0;
+    let si = 0;
+    let m: MatchState | null = null;
+    let running = false;
+
+    const close = () => {
+      token++;
+      lessonOn = null;
+      voice.stop();
+      b.highlight(null);
+      el.remove();
+      ui.classList.remove('lessoning');
+      if (wasMatch && match) {
+        b.setMode(match.mode);
+        b.sync(match.round.cells, crackingOf(match));
+        b.decorate(match.agents ? decorOf(match.round, match.agents) : null);
+        updateHud();
+      } else {
+        b.sync(Array(27).fill(null));
+        b.decorate(null);
+      }
+      back();
+    };
+    lessonOn = close;
+
+    const bar = (on: AbilityId | null) => {
+      const x = el.querySelector('.abilities') as HTMLElement | null;
+      if (!x || !m?.agents) return;
+      const p = m.round.turn;
+      x.className = `abilities demo ${COLORS[p]}`;
+      x.style.setProperty('--accent', AGENT_LOOK[m.agents.picks[p]].accent);
+      x.innerHTML = abilityButtons(m.round, m.agents, p, on, false);
+      if (on) x.querySelector(`[data-ab="${on}"]`)?.classList.add('tapme');
+    };
+
+    const draw = () => {
+      const l = lessons[li];
+      const st = l.steps[si];
+      const last = si === l.steps.length - 1;
+      const lastAll = last && li === lessons.length - 1;
+      const who = m?.agents ? `<span class="whoacts ${COLORS[m.round.turn]}">${m.round.turn === 0 ? 'Orange' : 'Blue'} · ${AGENTS[m.agents.picks[m.round.turn]].name}</span>` : '';
+      el.innerHTML =
+        `<div class="top"><p class="kicker">Show me · ${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p>${voiceBtn()}<button class="x" data-close aria-label="Close">✕</button></div>` +
+        `<div class="say">${who}<p>${esc(st.say)}</p>` +
+        `<div class="pips">${l.steps.map((_, k) => `<i class="${k === si ? 'on' : k < si ? 'done' : ''}"></i>`).join('')}</div>` +
+        `<div class="row"><button class="link" data-replay>↺ Replay</button>` +
+        `<button class="btn" data-next ${running ? 'disabled' : ''}>${lastAll ? 'Done' : last ? 'Next lesson' : 'Next'}</button></div></div>` +
+        '<div class="abilities demo" aria-hidden="true"></div>';
+      bar(null);
+      el.querySelector('[data-close]')!.addEventListener('click', close);
+      el.querySelector('[data-voice]')!.addEventListener('click', () => {
+        setVoice(!prefs.voice);
+        const v = el.querySelector('[data-voice]') as HTMLElement;
+        v.textContent = prefs.voice ? '🔊' : '🔇';
+        v.setAttribute('aria-pressed', String(prefs.voice));
+        if (prefs.voice) voice.say(st.say);
+      });
+      el.querySelector('[data-replay]')!.addEventListener('click', () => void start(li));
+      el.querySelector('[data-next]')!.addEventListener('click', () => {
+        if (running) return;
+        if (!last) void step(si + 1);
+        else if (!lastAll) void start(li + 1);
+        else close();
+      });
+    };
+
+    const show = (cells: number[], color = '#ffffff') => b.highlight(cells.length ? cells : null, color);
+
+    async function step(i: number): Promise<void> {
+      const my = ++token;
+      const l = lessons[li];
+      si = i;
+      const st = l.steps[i];
+      if (st.reset) {
+        m = lessonStart(l, st.reset);
+        b.sync(m.round.cells, crackingOf(m));
+        b.decorate(decorOf(m.round, m.agents!));
+      }
+      running = true;
+      draw();
+      voice.say(st.say);
+      show(st.focus ?? []);
+      const moves = stepMoves(l, st, m!);
+      if (moves.length) await sleep(1.4);
+      for (const mv of moves) {
+        if (my !== token || !m) return;
+        const color = PLAYER_COLORS_CSS[m.round.turn];
+        if (mv.kind === 'ability') {
+          bar(mv.id);
+          await sleep(0.7);
+          if (my !== token) return;
+          if (mv.cells?.length) {
+            show(mv.cells, color);
+            await sleep(0.9);
+          }
+          if (isUlt(mv.id)) splash(m.agents!.picks[m.round.turn], ABILITY_TEXT[mv.id].name.toUpperCase(), COLORS[m.round.turn]);
+        } else if (mv.kind === 'place') {
+          show([mv.cell], color);
+          await sleep(0.5);
+        } else if (mv.kind === 'drop') {
+          const land = landing(m.round.cells, mv.column);
+          if (land >= 0) show([land], color);
+          await sleep(0.5);
+        }
+        if (my !== token) return;
+        show([]);
+        const out = lessonMove(m, mv, l.realTimers);
+        m = out.state;
+        bar(null);
+        await b.play(out.events);
+        if (my !== token) return;
+        b.decorate(decorOf(m.round, m.agents!));
+        bar(null);
+        await sleep(0.35);
+      }
+      if (my !== token) return;
+      show(st.focus ?? []);
+      running = false;
+      const next = el.querySelector('[data-next]') as HTMLButtonElement | null;
+      if (next) next.disabled = false;
+    }
+
+    async function start(i: number): Promise<void> {
+      li = i;
+      const l = lessons[li];
+      m = lessonStart(l);
+      b.setMode(l.mode);
+      b.sync(m.round.cells, crackingOf(m));
+      b.decorate(decorOf(m.round, m.agents!));
+      await step(0);
+    }
+    void start(0);
+  }
+
+  /** Quick review in a match: both writers' powers, with a show-me for each. */
+  function review(tab: Player | null = null): void {
+    if (!match?.agents) return;
+    const a = match.agents;
+    const mode = match.mode;
+    let t: Player = tab ?? match.round.turn;
+    const sheet = document.createElement('div');
+    sheet.className = 'review';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', 'Powers');
+    const draw = () => {
+      const id = a.picks[t];
+      const st = abilityStatus(match!.round, a, t);
+      sheet.innerHTML =
+        '<div class="sheet"><div class="top"><p class="kicker">Powers</p><button class="x" data-close aria-label="Close">✕</button></div>' +
+        `<div class="tabs">${([0, 1] as const)
+          .map((p) => `<button class="tab ${COLORS[p]} ${p === t ? 'on' : ''}" data-tab="${p}"><img alt="" src="${agentArt(a.picks[p], 60, 72, true)}">${esc(names[p])} · ${AGENTS[a.picks[p]].name}</button>`)
+          .join('')}</div>` +
+        `<ul class="rlist" style="--accent:${AGENT_LOOK[id].accent}">${st
+          .map((x) => {
+            const state = x.ult ? (x.pips >= x.cost ? 'READY' : `${x.pips}/${x.cost}`) : x.cooldown > 0 ? `back in ${x.cooldown}` : 'ready';
+            return (
+              `<li><div class="rhead"><span class="ic ${x.ult ? 'ult' : ''}">${abilityIcon(x.id)}</span><b>${ABILITY_TEXT[x.id].name}</b><em>${x.ult ? 'ULT · ' : ''}${state}</em></div>` +
+              `<p>${abilityText(x.id, mode).replace(/^ULTIMATE\. /, '')}</p>` +
+              `<button class="link showme" data-show="${x.id}">▶ Show me</button></li>`
+            );
+          })
+          .join('')}</ul>` +
+        `<div class="topics">${ALL_TOPICS.map((k) => `<button class="chip" data-topic="${k}">${topicLesson(k).title}</button>`).join('')}</div></div>`;
+      sheet.querySelector('[data-close]')!.addEventListener('click', () => sheet.remove());
+      sheet.querySelectorAll<HTMLElement>('[data-tab]').forEach((x) => x.addEventListener('click', () => ((t = Number(x.dataset.tab) as Player), draw())));
+      sheet.querySelectorAll<HTMLElement>('[data-show]').forEach((x) =>
+        x.addEventListener('click', () => {
+          sheet.remove();
+          runLessons([abilityLesson(x.dataset.show as AbilityId, mode)], () => review(t));
+        }),
+      );
+      sheet.querySelectorAll<HTMLElement>('[data-topic]').forEach((x) =>
+        x.addEventListener('click', () => {
+          sheet.remove();
+          runLessons([topicLesson(x.dataset.topic as Topic)], () => review(t));
+        }),
+      );
+    };
+    draw();
+    ui.appendChild(sheet);
+  }
+
   // ---- Agents: select screen ----
   function agentSelect(p: Player, mode: Mode, picks: [AgentId, AgentId], then: () => void): void {
     let i = AGENT_IDS.indexOf(picks[p]);
@@ -359,7 +591,11 @@ export function startApp(app: HTMLElement): void {
             (ab) =>
               `<li><button class="pw ${isUlt(ab) ? 'ult' : ''} ${open === ab ? 'open' : ''}" data-pw="${ab}">${abilityIcon(ab)}<b>${ABILITY_TEXT[ab].name}</b>` +
               `<span>${isUlt(ab) ? 'ULT · ' : ''}${ABILITY_TEXT[ab].short}</span></button>` +
-              (open === ab ? `<div class="preview"><canvas width="220" height="190"></canvas><p>${abilityText(ab, mode)}</p></div>` : '') +
+              (open === ab
+                ? `<div class="preview"><canvas width="220" height="190"></canvas><p>${abilityText(ab, mode)}</p>` +
+                  (board ? `<button class="btn alt showme" data-show="${ab}">▶ Show me on the cube</button>` : '') +
+                  '</div>'
+                : '') +
               '</li>',
           )
           .join('')}</ul>`;
@@ -373,6 +609,11 @@ export function startApp(app: HTMLElement): void {
       );
       const cv = card.querySelector('.preview canvas') as HTMLCanvasElement | null;
       if (cv && open) stopPreview = playPreview(cv, open, manual);
+      card.querySelector<HTMLElement>('[data-show]')?.addEventListener('click', (e) => {
+        const ab = (e.currentTarget as HTMLElement).dataset.show as AbilityId;
+        stopPreview?.();
+        runLessons([abilityLesson(ab, mode)], () => draw());
+      });
     };
     const step = (d: number) => {
       i = (i + d + AGENT_IDS.length) % AGENT_IDS.length;
@@ -425,24 +666,43 @@ export function startApp(app: HTMLElement): void {
   }
 
   /** The how-to-play cards; `then` runs when they're closed. */
-  function help(mode: HelpTopic, then?: () => void): void {
+  function setVoice(on: boolean): void {
+    prefs = { ...prefs, voice: on };
+    voice.enabled = on;
+    if (!on) voice.stop();
+    savePrefs(prefs);
+  }
+  const voiceBtn = () => `<button class="voice" data-voice aria-label="Read aloud" aria-pressed="${prefs.voice}">${prefs.voice ? '🔊' : '🔇'}</button>`;
+
+  function help(mode: HelpTopic, then?: () => void, at = 0): void {
     const h = HELP[mode];
-    let i = 0;
+    let i = at;
     const overlay = document.createElement('div');
     overlay.className = 'help';
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-label', `How to play ${h.title}`);
     const draw = () => {
-      const [t, body] = h.cards[i];
+      const [t, body, topic] = h.cards[i];
       overlay.innerHTML =
-        `<div class="sheet"><p class="kicker">How to play · ${h.title}</p><h2>${t}</h2><p>${body}</p>` +
+        `<div class="sheet"><div class="top"><p class="kicker">How to play · ${h.title}</p>${voiceBtn()}</div><h2>${t}</h2><p>${body}</p>` +
+        (topic && board ? '<button class="btn alt showme" data-show>▶ Show me on the cube</button>' : '') +
         `<div class="pips">${h.cards.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-skip>${i < h.cards.length - 1 ? 'Skip' : ''}</button>` +
         `<button class="btn" data-next>${i < h.cards.length - 1 ? 'Next' : "Let's play"}</button></div></div>`;
+      voice.say(`${t}. ${body}`);
       overlay.querySelector('[data-next]')!.addEventListener('click', () => (i < h.cards.length - 1 ? (i++, draw()) : close()));
       overlay.querySelector('[data-skip]')!.addEventListener('click', close);
+      overlay.querySelector('[data-voice]')!.addEventListener('click', () => {
+        setVoice(!prefs.voice);
+        draw();
+      });
+      overlay.querySelector('[data-show]')?.addEventListener('click', () => {
+        overlay.remove();
+        runLessons([topicLesson(topic!)], () => help(mode, then, i));
+      });
     };
     const close = () => {
+      voice.stop();
       overlay.remove();
       if (!prefs.seenHelp.includes(mode)) {
         prefs = { ...prefs, seenHelp: [...prefs.seenHelp, mode] };
@@ -486,7 +746,11 @@ export function startApp(app: HTMLElement): void {
     }
     matchScreen();
     const agentsHelp = () => {
-      if (match?.agents && !prefs.seenHelp.includes('agents')) help('agents');
+      if (match?.agents && !prefs.seenHelp.includes('agents')) {
+        prefs = { ...prefs, seenHelp: [...prefs.seenHelp, 'agents'] };
+        savePrefs(prefs);
+        agentsTutorial();
+      }
     };
     if (!prefs.seenHelp.includes(mode)) help(mode, agentsHelp);
     else agentsHelp();
@@ -496,6 +760,7 @@ export function startApp(app: HTMLElement): void {
     show(
       'match',
       '<button class="back" aria-label="Leave match">✕</button><button class="ask" aria-label="How to play">?</button>' +
+        (match?.agents ? '<button class="powersbtn" aria-label="Review powers">⚡<span>Powers</span></button>' : '') +
         `<div class="hud">${[0, 1]
           .map((p) => {
             const ag = match?.agents?.picks[p];
@@ -509,36 +774,41 @@ export function startApp(app: HTMLElement): void {
     ui.querySelector('.back')!.addEventListener('click', () => {
       if (online ? confirm('Leave the room? The match ends.') : true) homeScreen();
     });
-    ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode, () => match?.agents && help('agents')));
+    ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode));
+    ui.querySelector('.powersbtn')?.addEventListener('click', () => review());
     updateHud();
   }
 
   // ---- Agents: the ability bar and targeting ----
+  /** The four ability buttons for player `p` (also drawn, read-only, in lessons). */
+  function abilityButtons(r: AgentRound, a: AgentsState, p: Player, on: AbilityId | null, allOff: boolean): string {
+    return abilityStatus(r, a, p)
+      .map((x) => {
+        const off = !!x.blocked || allOff;
+        const badge = x.ult
+          ? `<span class="meter" style="--f:${Math.min(1, x.pips / x.cost)}"></span><em>${x.pips >= x.cost ? 'READY' : `${x.pips}/${x.cost}`}</em>`
+          : x.cooldown > 0
+            ? `<em class="cd">${x.cooldown}</em>`
+            : '';
+        return (
+          `<button class="ab ${x.ult ? 'ult' : ''} ${off ? 'off' : ''} ${on === x.id ? 'on' : ''} ${a.used === x.id ? 'used' : ''}" data-ab="${x.id}" ` +
+          `aria-label="${ABILITY_TEXT[x.id].name}${x.cooldown ? `, ready in ${x.cooldown}` : ''}${x.ult ? `, ${x.pips} of ${x.cost}` : ''}">` +
+          `${abilityIcon(x.id)}<b>${ABILITY_TEXT[x.id].name}</b>${badge}</button>`
+        );
+      })
+      .join('');
+  }
+
   function renderAbilities(): void {
     const bar = ui.querySelector('.abilities') as HTMLElement | null;
     if (!bar || !match?.agents) return;
     const r = match.round;
     const p = r.turn;
     const agent = match.agents.picks[p];
-    const st = abilityStatus(r, match.agents, p);
     bar.className = `abilities ${COLORS[p]}`;
     bar.style.setProperty('--accent', AGENT_LOOK[agent].accent);
     bar.hidden = !!r.result;
-    bar.innerHTML = st
-      .map((a) => {
-        const off = !!a.blocked || busy;
-        const badge = a.ult
-          ? `<span class="meter" style="--f:${Math.min(1, a.pips / a.cost)}"></span><em>${a.pips >= a.cost ? 'READY' : `${a.pips}/${a.cost}`}</em>`
-          : a.cooldown > 0
-            ? `<em class="cd">${a.cooldown}</em>`
-            : '';
-        return (
-          `<button class="ab ${a.ult ? 'ult' : ''} ${off ? 'off' : ''} ${targeting?.id === a.id ? 'on' : ''} ${match!.agents!.used === a.id ? 'used' : ''}" data-ab="${a.id}" ` +
-          `aria-label="${ABILITY_TEXT[a.id].name}${a.cooldown ? `, ready in ${a.cooldown}` : ''}${a.ult ? `, ${a.pips} of ${a.cost}` : ''}">` +
-          `${abilityIcon(a.id)}<b>${ABILITY_TEXT[a.id].name}</b>${badge}</button>`
-        );
-      })
-      .join('');
+    bar.innerHTML = abilityButtons(r, match.agents, p, targeting?.id ?? null, busy);
     bar.querySelectorAll<HTMLElement>('[data-ab]').forEach((b) => b.addEventListener('click', () => onAbility(b.dataset.ab as AbilityId)));
   }
 
@@ -574,7 +844,7 @@ export function startApp(app: HTMLElement): void {
   }
 
   function onAbility(id: AbilityId): void {
-    if (!match?.agents || !board || screen !== 'match' || busy || match.round.result) return;
+    if (lessonOn || !match?.agents || !board || screen !== 'match' || busy || match.round.result) return;
     if (targeting?.id === id) return cancelTargeting();
     cancelTargeting(false);
     const why = abilityBlocked(match.round, match.agents, id);
@@ -715,7 +985,7 @@ export function startApp(app: HTMLElement): void {
 
   /** Aim marker: the cell a tap would paint (Cascade: where the drop lands), if legal. */
   function aimAt(cell: number): number | null {
-    if (!match || screen !== 'match' || busy || awaiting || match.round.result || !isMyTurn() || targeting) return null;
+    if (lessonOn || !match || screen !== 'match' || busy || awaiting || match.round.result || !isMyTurn() || targeting) return null;
     const r = match.round;
     if (r.mode === 'rotating') return checkMove(match, { kind: 'place', cell }) ? null : cell;
     const column = coord(cell)[0] + 3 * coord(cell)[1];
@@ -724,6 +994,7 @@ export function startApp(app: HTMLElement): void {
 
   // Twists: a swipe on the cube asks first, then holds a preview until confirmed.
   function onTwistIntent(t: Twist): boolean {
+    if (lessonOn) return false;
     if (!match || screen !== 'match' || busy || awaiting || match.round.result) return false;
     if (targeting) {
       const tg = targeting;
@@ -793,6 +1064,7 @@ export function startApp(app: HTMLElement): void {
   }
 
   async function onTap(cell: number): Promise<void> {
+    if (lessonOn) return;
     if (!match || !board || screen !== 'match' || busy || awaiting || match.round.result) return;
     if (targeting) return targetTap(cell);
     if (!isMyTurn()) {
@@ -1108,6 +1380,7 @@ export function startApp(app: HTMLElement): void {
         aim: (c) => board?.aim(c),
         advance: (sec, draw = true) => board?.advance(sec, draw),
         state: () => match,
+        lesson: () => !!lessonOn,
       };
     });
 }

@@ -70,7 +70,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   r.toneMapping = T.ACESFilmicToneMapping;
   r.toneMappingExposure = 1.05;
   r.shadowMap.enabled = true;
-  r.shadowMap.type = T.PCFSoftShadowMap;
+  r.shadowMap.type = T.PCFShadowMap;
   const dpr = devicePixelRatio || 1;
   const maxRatio = Math.min(3, dpr);
   /** Never trade the resolution below this: sharpness comes first. */
@@ -106,7 +106,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   lamp.position.set(-4.5, 8, 7);
   lamp.target.position.set(0.5, -1, -2);
   lamp.castShadow = true;
-  lamp.shadow.mapSize.set(1024, 1024);
+  lamp.shadow.mapSize.set(2048, 2048);
   lamp.shadow.bias = -0.0006;
   lamp.shadow.radius = 4;
   world.add(lamp, lamp.target);
@@ -1461,7 +1461,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     fx.budget = budget;
   };
   const steps: (() => void)[] = [
-    quality(maxRatio, true, 1024, 1),
+    quality(maxRatio, false, 2048, 1),
     quality(maxRatio, false, 1024, 1),
     quality(maxRatio, false, 512, 0.6),
   ];

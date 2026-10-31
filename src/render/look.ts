@@ -111,7 +111,7 @@ export function splatTexture(T: Three, seed: number, size = 256): any {
  * top to the base colour, spray grain, a darker overspray rim, and the classic white
  * graffiti shine (two diagonal strokes and a sparkle) in the top-left corner.
  */
-export function sprayFillTexture(T: Three, base: string, light: string, seed: number, size = 512): any {
+export function sprayFillTexture(T: Three, base: string, light: string, seed: number, size = 1024): any {
   const [c, g] = canvas(size, size);
   const r = rand(seed + 5);
   const gr = g.createLinearGradient(0, 0, size * 0.3, size);
@@ -122,9 +122,9 @@ export function sprayFillTexture(T: Three, base: string, light: string, seed: nu
   g.fillRect(0, 0, size, size);
   // Grain: light and dark specks, like a can sprayed from a distance.
   const k = size / 256;
-  for (let i = 0; i < 2600 * k * k; i++) {
-    g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.18})` : `rgba(0,0,0,${r() * 0.16})`;
-    const s = (0.8 + r() * 2.2) * k * 0.75;
+  for (let i = 0; i < 1400 * k * k; i++) {
+    g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.12})` : `rgba(0,0,0,${r() * 0.1})`;
+    const s = (0.8 + r() * 1.8) * k * 0.5;
     g.fillRect(r() * size, r() * size, s, s);
   }
   // Overspray rim: a soft dark band at the edges.
@@ -164,15 +164,15 @@ export function sprayFillTexture(T: Three, base: string, light: string, seed: nu
 }
 
 /** Subtle concrete grain for the blank blocks (the "wall" the paint goes on). */
-export function concreteTexture(T: Three, size = 512): any {
+export function concreteTexture(T: Three, size = 1024): any {
   const [c, g] = canvas(size, size);
   const r = rand(77);
   const k = size / 256;
   g.fillStyle = '#b4afc4';
   g.fillRect(0, 0, size, size);
-  for (let i = 0; i < 3000 * k * k; i++) {
-    g.fillStyle = r() < 0.5 ? `rgba(0,0,0,${r() * 0.1})` : `rgba(255,255,255,${r() * 0.12})`;
-    const s = (0.7 + r() * 2.5) * k * 0.75;
+  for (let i = 0; i < 900 * k * k; i++) {
+    g.fillStyle = r() < 0.5 ? `rgba(0,0,0,${r() * 0.06})` : `rgba(255,255,255,${r() * 0.08})`;
+    const s = (0.6 + r() * 1.6) * k * 0.6;
     g.fillRect(r() * size, r() * size, s, s);
   }
   const t = new T.CanvasTexture(c);
@@ -224,7 +224,8 @@ export function makeMaterials(T: Three, env: any): Materials {
   const ramp = toonRamp(T);
   return {
     ramp,
-    casing: new T.MeshStandardMaterial({ color: '#ffffff', map: concreteTexture(T), roughness: 0.8, metalness: 0.0, envMap: env, envMapIntensity: 0.4 }),
+    // Smooth satin blocks with a fine, faint grain (heavy grain read as blur on a phone).
+    casing: new T.MeshStandardMaterial({ color: '#ffffff', map: concreteTexture(T), roughness: 0.62, metalness: 0.0, envMap: env, envMapIntensity: 0.5 }),
     casingEdge: new T.MeshBasicMaterial({ color: '#5b4fd6', transparent: true, opacity: 0.55 }),
     core: new T.MeshStandardMaterial({ color: CORE_COLOR, emissive: CORE_COLOR, emissiveIntensity: 2.4, roughness: 0.3 }),
     paint: [
