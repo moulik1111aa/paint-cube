@@ -8,6 +8,8 @@ import { createBoard, type Board } from '../render/board.ts';
 import { fontsReady } from '../render/street.ts';
 import { Sfx } from '../audio/sfx.ts';
 import { coord, type Player } from '../core/geometry.ts';
+import { MAX_MARKS } from '../core/rotating.ts';
+import { landing } from '../core/cascade.ts';
 import type { Twist } from '../core/twist.ts';
 import type { GameEvent, IllegalReason } from '../core/events.ts';
 import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
@@ -29,6 +31,7 @@ declare global {
       tap: (cell: number) => Promise<void>;
       busy: () => boolean;
       swipe: (cell: number, dx: number, dy: number) => boolean;
+      aim: (cell: number | null) => void;
       advance: (sec: number, draw?: boolean) => void;
       state: () => MatchState | null;
     };
@@ -116,6 +119,7 @@ export function startApp(app: HTMLElement): void {
     if (!board || manual) return;
     stopDemo();
     board.attract = true;
+    board.setTurn(null);
     const mode: Mode = Math.random() < 0.5 ? 'rotating' : 'cascade';
     demo = newMatch(mode, 0);
     board.setMode(mode);
@@ -306,7 +310,7 @@ export function startApp(app: HTMLElement): void {
     if (board) {
       board.attract = false;
       board.setMode(m.mode);
-      board.sync(m.round.cells);
+      board.sync(m.round.cells, crackingOf(m));
     }
     matchScreen();
     if (m.round.result) roundOver();
@@ -375,7 +379,24 @@ export function startApp(app: HTMLElement): void {
       }
       away.textContent = `${names[online.me === 0 ? 1 : 0]} dropped · waiting ${view.awayLeft}s`;
     } else away?.remove();
-    if (board) board.twistEnabled = r.mode === 'rotating' && !r.result && !busy && !awaiting && isMyTurn();
+    if (board) {
+      board.twistEnabled = r.mode === 'rotating' && !r.result && !busy && !awaiting && isMyTurn();
+      board.setTurn(r.result || busy || !isMyTurn() ? null : r.turn);
+      board.names = [names[0], names[1]];
+    }
+  }
+
+  /** Marks that fade on their owner's next placement (shown cracked). */
+  const crackingOf = (m: MatchState): number[] =>
+    m.round.mode === 'rotating' ? m.round.marks.flatMap((ms) => (ms.length >= MAX_MARKS ? [ms[0]] : [])) : [];
+
+  /** Aim marker: the cell a tap would paint (Cascade: where the drop lands), if legal. */
+  function aimAt(cell: number): number | null {
+    if (!match || screen !== 'match' || busy || awaiting || match.round.result || !isMyTurn()) return null;
+    const r = match.round;
+    if (r.mode === 'rotating') return checkMove(match, { kind: 'place', cell }) ? null : cell;
+    const column = coord(cell)[0] + 3 * coord(cell)[1];
+    return checkMove(match, { kind: 'drop', column }) ? null : landing(r.cells, column);
   }
 
   // Twists: a swipe on the cube asks first, then holds a preview until confirmed.
@@ -450,6 +471,7 @@ export function startApp(app: HTMLElement): void {
     }
     busy = true;
     board.twistEnabled = false;
+    board.setTurn(null);
     const out = applyMove(match, move);
     match = out.state;
     persist();
@@ -649,7 +671,7 @@ export function startApp(app: HTMLElement): void {
         const cells = JSON.stringify(next.round.cells);
         if (cells !== shown) {
           // A new round, or a state we missed (reconnect): just show it.
-          board?.sync(next.round.cells);
+          board?.sync(next.round.cells, crackingOf(next));
           shown = cells;
         }
         if (roundChanged) ui.querySelector('.result')?.remove();
@@ -688,6 +710,7 @@ export function startApp(app: HTMLElement): void {
       board.onTap = (c) => void onTap(c);
       board.onTwistIntent = onTwistIntent;
       board.onTwistReady = onTwistReady;
+      board.aimAt = aimAt;
       root.dataset.threeD = 'ok';
     })
     .catch((e) => {
@@ -716,6 +739,7 @@ export function startApp(app: HTMLElement): void {
         tap: (c) => onTap(c),
         busy: () => busy,
         swipe: (c, dx, dy) => !!board?.swipe(c, dx, dy),
+        aim: (c) => board?.aim(c),
         advance: (sec, draw = true) => board?.advance(sec, draw),
         state: () => match,
       };

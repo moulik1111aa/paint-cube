@@ -13,7 +13,7 @@ export type GameEvent =
   /** A player's oldest mark faded away, before their new mark landed. */
   | { type: 'faded'; player: Player; cell: number }
   /** A layer turned; `moves` lists the marks that moved with it. */
-  | { type: 'twisted'; twist: Twist; moves: { from: number; to: number }[] }
+  | { type: 'twisted'; twist: Twist; moves: { from: number; to: number }[]; player?: Player }
   /** A completed line. In stacking mode `wave` is the cascade wave (1, 2, ...). */
   | { type: 'lineCompleted'; player: Player; cells: Line; wave: number }
   /** These cells' paint shattered and cleared (stacking mode). */

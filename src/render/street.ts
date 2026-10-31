@@ -289,3 +289,36 @@ export function graffitiCaption(T: Three, text: string, fill: string): any {
   t.colorSpace = T.SRGBColorSpace;
   return t;
 }
+
+/** A big wall tag (the match winner's name), fitted to a 2:1 canvas. */
+export function wallTagTexture(T: Three, text: string, fill: string): any {
+  const [c, g] = canvas(1024, 512);
+  g.font = `900 100px ${FONT}`;
+  const w = g.measureText(text).width || 1;
+  const size = Math.max(70, Math.min(250, (860 / w) * 100));
+  // Buff first: a rough slab of fresh dark paint going over whatever was there.
+  const r = seeded(text.length * 17 + 3);
+  const tw = Math.min(980, (w * size) / 100 + 90);
+  g.save();
+  g.translate(512, 250);
+  g.rotate(-0.09);
+  g.fillStyle = '#17111f';
+  g.beginPath();
+  const n = 28;
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const rx = (tw / 2) * (0.96 + r() * 0.08);
+    const ry = size * 0.82 * (0.9 + r() * 0.15);
+    const x = Math.sign(Math.cos(a)) * Math.pow(Math.abs(Math.cos(a)), 0.35) * rx;
+    const y = Math.sign(Math.sin(a)) * Math.pow(Math.abs(Math.sin(a)), 0.35) * ry;
+    if (i === 0) g.moveTo(x, y);
+    else g.lineTo(x, y);
+  }
+  g.fill();
+  drips(g, -tw / 2 + 30, tw / 2 - 30, size * 0.7, '#17111f', r, 8);
+  g.restore();
+  bubbleText(g, text, 512, 240, size, fill, seeded(text.length * 31 + 5), -0.09);
+  const t = new T.CanvasTexture(c);
+  t.colorSpace = T.SRGBColorSpace;
+  return t;
+}

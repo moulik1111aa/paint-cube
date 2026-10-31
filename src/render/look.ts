@@ -252,3 +252,44 @@ export function glowTexture(T: Three, size = 256): any {
   g.fillRect(0, 0, size, size);
   return new T.CanvasTexture(c);
 }
+
+/** Hairline cracks on transparent, laid over a mark that fades next turn. */
+export function crackTexture(T: Three, size = 512): any {
+  const [c, g] = canvas(size, size);
+  const r = rand(311);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  const branch = (x: number, y: number, a: number, len: number, w: number, depth: number) => {
+    g.lineWidth = w;
+    g.strokeStyle = 'rgba(12,8,18,0.92)';
+    g.beginPath();
+    g.moveTo(x, y);
+    let cx = x;
+    let cy = y;
+    const segs = 5 + Math.floor(r() * 4);
+    for (let i = 0; i < segs; i++) {
+      a += (r() - 0.5) * 0.9;
+      cx += Math.cos(a) * (len / segs);
+      cy += Math.sin(a) * (len / segs);
+      g.lineTo(cx, cy);
+      if (depth > 0 && r() < 0.3) {
+        g.stroke();
+        branch(cx, cy, a + (r() < 0.5 ? 0.9 : -0.9), len * 0.45, w * 0.6, depth - 1);
+        g.lineWidth = w;
+        g.strokeStyle = 'rgba(12,8,18,0.92)';
+        g.beginPath();
+        g.moveTo(cx, cy);
+      }
+    }
+    g.stroke();
+  };
+  for (let k = 0; k < 5; k++) {
+    const x = size * (0.25 + r() * 0.5);
+    const y = size * (0.25 + r() * 0.5);
+    branch(x, y, r() * Math.PI * 2, size * (0.35 + r() * 0.3), size * 0.012, 2);
+  }
+  const t = new T.CanvasTexture(c);
+  t.colorSpace = T.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}

@@ -70,7 +70,7 @@ export class Tweens {
 }
 
 const DROPS = 700;
-const SHARDS = 220;
+const SHARDS = 420;
 
 export class Fx {
   readonly group: any;
@@ -172,6 +172,25 @@ export class Fx {
     this.shards.instanceColor.needsUpdate = true;
   }
 
+  /** Confetti: paper flakes shot from `pos` along `dir` (a unit vector), in these colours. */
+  confetti(pos: any, dir: any, colors: readonly string[], count: number, speed = 7): void {
+    const n = Math.round(count * this.budget);
+    for (let k = 0; k < n; k++) {
+      const i = this.sNext;
+      this.sNext = (this.sNext + 1) % SHARDS;
+      const c = this.m.c.set(colors[k % colors.length]);
+      const sp = speed * (0.55 + Math.random() * 0.6);
+      this.sPos.set([pos.x, pos.y, pos.z], i * 3);
+      this.sVel.set([(dir.x + (Math.random() - 0.5) * 0.7) * sp, (dir.y + (Math.random() - 0.5) * 0.5) * sp, (dir.z + (Math.random() - 0.5) * 0.7) * sp], i * 3);
+      const a = this.m.axis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+      this.sRot.set([a.x, a.y, a.z, 8 + Math.random() * 14], i * 4);
+      this.sMax[i] = this.sLife[i] = 1.6 + Math.random() * 0.9;
+      this.sSize[i] = 0.07 + Math.random() * 0.06;
+      this.shards.setColorAt(i, c);
+    }
+    this.shards.instanceColor.needsUpdate = true;
+  }
+
   /** A paint splat sprite that bursts open and fades. */
   splat(pos: any, color: string, size: number, life = 0.6): void {
     const T = this.T;
@@ -230,6 +249,9 @@ export class Fx {
       this.sLife[i] -= dt;
       const j = i * 3;
       this.sVel[j + 1] -= 6 * dt;
+      const drag = Math.exp(-0.9 * dt);
+      this.sVel[j] *= drag;
+      this.sVel[j + 2] *= drag;
       this.sPos[j] += this.sVel[j] * dt;
       this.sPos[j + 1] += this.sVel[j + 1] * dt;
       this.sPos[j + 2] += this.sVel[j + 2] * dt;

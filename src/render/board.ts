@@ -5,8 +5,8 @@
 
 import { makeRenderer, RenderLoop, softEnv, disposeAll, type Three } from './three.ts';
 import { Post } from './post.ts';
-import { makeMaterials, roundedBox, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
-import { wallTexture, groundTexture, graffitiCaption } from './street.ts';
+import { makeMaterials, roundedBox, crackTexture, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
+import { wallTexture, groundTexture, graffitiCaption, wallTagTexture } from './street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from './fx3d.ts';
 import type { Sfx } from '../audio/sfx.ts';
 import { haptics } from '../platform/haptics.ts';
@@ -32,14 +32,22 @@ export interface Board {
   /** Start a twist preview from a swipe (tests): cell, then a swipe in screen pixels. */
   swipe(cell: number, dx: number, dy: number): Twist | null;
   setMode(mode: Mode): void;
-  /** Show these cells immediately, without animation. */
-  sync(cells: readonly Cell[]): void;
+  /** Show these cells immediately, without animation (`cracking`: marks that fade next). */
+  sync(cells: readonly Cell[], cracking?: readonly number[]): void;
   /** Animate the engine's events in order; resolves when the board is calm. */
   play(events: readonly GameEvent[]): Promise<void>;
   /** A small "no" shake for a refused tap. */
   refuse(cell: number): void;
   /** Idle presentation (slow sway) when no one is playing. */
   attract: boolean;
+  /** The cell to mark while a finger is over `cell` (the landing cell in Cascade), or null. */
+  aimAt: ((cell: number) => number | null) | null;
+  /** Show the aim marker as if a finger were on `cell` (tests), or hide it. */
+  aim(cell: number | null): void;
+  /** Whose turn it is: the Core pulses in their colour and the aim marker uses it. */
+  setTurn(p: Player | null): void;
+  /** Player names, for the big wall tag when a match is won. */
+  names: [string, string];
   /** Manual clock (tests): advance game time and optionally draw. */
   advance(sec: number, draw?: boolean): void;
   dispose(): void;
@@ -139,19 +147,28 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const dripGeo = new T.SphereGeometry(1, 14, 10);
   const dripRod = new T.CylinderGeometry(1, 1, 1, 8, 1);
   dripRod.translate(0, -0.5, 0);
+  const coreTarget = new T.Color(CORE_COLOR);
+  const coreGold = new T.Color(CORE_COLOR);
+  const crackMat = new T.MeshBasicMaterial({ map: crackTexture(T), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   let shells: (any | null)[] = Array(CELLS).fill(null);
   let owners: (Player | null)[] = Array(CELLS).fill(null);
   let mode: Mode = 'rotating';
 
   function makeShell(p: Player, seed: number): any {
     const g = new T.Group();
+    // Everything visible sits in `inner`, so the idle wobble never fights the outer
+    // group's position/scale animations.
+    const inner = new T.Group();
+    g.add(inner);
+    g.userData.inner = inner;
+    g.userData.phase = seed * 0.37;
     const body = new T.Mesh(shellGeo, M.paint[p]);
     body.castShadow = true;
     body.receiveShadow = true;
     body.userData.body = true;
     const hull = new T.Mesh(shellGeo, M.ink);
     hull.scale.setScalar(1.1);
-    g.add(hull, body);
+    inner.add(hull, body);
     let s = seed * 7919 + 13;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
     const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -168,10 +185,15 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       const dh = new T.Mesh(dripGeo, M.ink);
       dh.position.copy(pos);
       dh.scale.setScalar(rad * 1.3);
-      g.add(dh, drip);
+      inner.add(dh, drip);
     }
     g.userData.player = p;
     return g;
+  }
+
+  /** The paint body meshes of a shell (for flashes and drying). */
+  function bodiesOf(s: any): any[] {
+    return ((s?.userData.inner ?? s)?.children ?? []).filter((m: any) => m.userData.body);
   }
 
   function addDrips(shell: any, cell: number, p: Player): void {
@@ -198,7 +220,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       rod.scale.set(w, 0.001, w);
       tip.scale.setScalar(w * 1.5);
       g.add(rod, tip);
-      shell.add(g);
+      (shell.userData.inner ?? shell).add(g);
       void anim(1.3 + Math.random() * 0.6, (t) => {
         const l = len * ease.outCubic(t);
         rod.scale.y = Math.max(0.001, l);
@@ -230,7 +252,104 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     s.material.dispose();
   }
 
-  const pulse = { bloom: 0, aberr: 0, flash: 0 };
+  const pulse = { bloom: 0, aberr: 0, flash: 0, punch: 0 };
+
+  // Aim marker: a glowing halo in the mover's colour around the cell under the finger,
+  // plus a ghost of the paint in Cascade (where the drop will land).
+  let turnP: Player | null = null;
+  const haloMat = new T.MeshBasicMaterial({ color: '#ffffff', side: T.BackSide, transparent: true, opacity: 0.95, depthWrite: false });
+  const aimHalo = new T.Mesh(casingGeo, haloMat);
+  aimHalo.scale.setScalar(1.2);
+  aimHalo.layers.set(1);
+  aimHalo.visible = false;
+  cube.add(aimHalo);
+  const ghostMat = new T.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.42, depthWrite: false });
+  const aimGhost = new T.Mesh(shellGeo, ghostMat);
+  aimGhost.layers.set(1);
+  aimGhost.visible = false;
+  cube.add(aimGhost);
+  let aimCell = -1;
+  function showAim(cell: number | null): void {
+    const at = cell === null || turnP === null || !board.aimAt ? null : board.aimAt(cell);
+    if (at === null || at < 0) {
+      aimHalo.visible = aimGhost.visible = false;
+      aimCell = -1;
+      return;
+    }
+    const color = new T.Color(PLAYER_COLORS[turnP!]);
+    haloMat.color.copy(color).multiplyScalar(1.8);
+    ghostMat.color.copy(color);
+    aimHalo.position.copy(slot(at));
+    aimHalo.visible = true;
+    aimGhost.position.copy(slot(at));
+    aimGhost.visible = mode === 'cascade';
+    aimCell = at;
+  }
+
+  // Twist streak: a ring of comet-tail paint around the turning layer, in the mover's colour.
+  const streakTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 8;
+    const g = c.getContext('2d')!;
+    const gr = g.createLinearGradient(0, 0, 256, 0);
+    gr.addColorStop(0, 'rgba(255,255,255,0)');
+    gr.addColorStop(0.85, 'rgba(255,255,255,0.9)');
+    gr.addColorStop(1, 'rgba(255,255,255,1)');
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 256, 8);
+    const t = new T.CanvasTexture(c);
+    t.wrapS = T.RepeatWrapping;
+    return t;
+  })();
+  const streakGeo = new T.TorusGeometry(1.62, 0.05, 6, 96);
+  function streak(ctx: TwistCtx, p: Player | null | undefined): any {
+    if (p === null || p === undefined) return null;
+    const map = streakTex.clone();
+    map.needsUpdate = true;
+    map.repeat.x = 4 * ctx.sign;
+    const mat = new T.MeshBasicMaterial({ map, color: new T.Color(PLAYER_COLORS[p]).multiplyScalar(2.2), transparent: true, opacity: 0, depthWrite: false, blending: T.AdditiveBlending });
+    const ring = new T.Mesh(streakGeo, mat);
+    ring.layers.set(1);
+    ring.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), ctx.axisVec);
+    ring.userData.base = ring.quaternion.clone();
+    ring.position.copy(ctx.axisVec).multiplyScalar((ctx.t.slice - 1) * SPACING);
+    ctx.pivot.add(ring);
+    return ring;
+  }
+  function dropStreak(ring: any): void {
+    if (!ring) return;
+    void anim(0.35, (k) => (ring.material.opacity = 0.9 * (1 - k))).then(() => {
+      ring.parent?.remove(ring);
+      ring.material.map.dispose();
+      ring.material.dispose();
+    });
+  }
+
+  /** A short wall tag (the match winner's name) sprayed on the wall; cleared by sync(). */
+  let tag: any = null;
+  function clearTag(): void {
+    if (!tag) return;
+    world.remove(tag);
+    tag.material.map.dispose();
+    tag.material.dispose();
+    tag = null;
+  }
+  async function wallTag(text: string, color: string): Promise<void> {
+    clearTag();
+    const mat = new T.MeshBasicMaterial({ map: wallTagTexture(T, text, color), transparent: true, opacity: 0, depthWrite: false });
+    tag = new T.Mesh(new T.PlaneGeometry(8, 4), mat);
+    tag.position.set(0, 4.2, -4.95);
+    tag.layers.set(3);
+    world.add(tag);
+    const t = tag;
+    sfx.whoosh();
+    for (let k = 0; k < 6; k++) fx.mist(new T.Vector3(-3 + k * 1.2, 4.2 + (Math.random() - 0.5), -4.6), color, 30, 2.5);
+    await anim(0.45, (k) => {
+      t.material.opacity = Math.min(1, k * 1.6);
+      t.scale.set(0.6 + 0.4 * ease.outBack(k), 0.6 + 0.4 * ease.outBack(k), 1);
+    });
+  }
   // Respect the phone's reduced-motion setting: much less shake, no colour split or flash.
   const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const hit = (s: { freeze?: number; shake?: number; bloom?: number; aberr?: number; flash?: number }) => {
@@ -346,7 +465,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       cube.add(beam);
       beams.push(beam);
     });
-    const bodies = cells.flatMap((i) => (shells[i]?.children ?? []).filter((m: any) => m.userData.body));
+    const bodies = cells.flatMap((i) => bodiesOf(shells[i]));
     const saved = bodies.map((m: any) => m.material);
     sfx.whoosh();
     await anim(0.2, (k) => {
@@ -354,7 +473,11 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       cells.forEach((i) => shells[i]?.scale.setScalar(1 + 0.2 * ease.outCubic(k)));
       if (k > 0.4) bodies.forEach((m: any) => (m.material = flashMat));
     });
-    hit({ freeze: 0.09, shake: 0.6 + 0.15 * wave, bloom: 1.4 + 0.3 * wave, aberr: 0.014 + 0.006 * wave, flash: 0.16 });
+    // A combo: several lines at once, or a later cascade wave.
+    const combo = Math.max(wave, lines.length);
+    const big = 1 + 0.35 * (combo - 1);
+    hit({ freeze: 0.09, shake: 0.6 + 0.15 * combo, bloom: 1.4 + 0.3 * combo, aberr: 0.014 + 0.006 * combo, flash: 0.16 });
+    if (combo > 1) pulse.punch = Math.max(pulse.punch, 0.05 + 0.025 * Math.min(4, combo));
     sfx.burst(wave);
     haptics.burst(wave);
     bodies.forEach((m: any, k: number) => (m.material = saved[k]));
@@ -362,16 +485,16 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       for (const i of cells) {
         const pos = toWorld(i);
         const color = PLAYER_COLORS[owners[i] ?? players[0]];
-        fx.burst(pos, color, 40, 6.5, 0.08);
-        fx.mist(pos, color, 90, 8);
-        fx.splat(pos.clone().addScaledVector(towardCamera(pos), 0.6), color, 2.6, 0.7);
-        fx.ring(pos, color, 2.4, 0.45);
+        fx.burst(pos, color, 40 * big, 6.5 * Math.sqrt(big), 0.08);
+        fx.mist(pos, color, 90 * big, 8);
+        fx.splat(pos.clone().addScaledVector(towardCamera(pos), 0.6), color, 2.6 * big, 0.7);
+        fx.ring(pos, color, 2.4 * big, 0.45);
         removeShell(i);
       }
     } else cells.forEach((i) => shells[i]?.scale.setScalar(1));
     const mid = toWorld(lines[0][1]);
-    const word = wave > 1 ? `COMBO x${wave}` : 'LINE!';
-    void caption(word, PLAYER_COLORS[players[0]], mid.clone().addScaledVector(towardCamera(mid), 2.2), wave > 1 ? 2.4 : 2.7);
+    const word = combo >= 4 ? `MEGA x${combo}` : combo === 3 ? 'TRIPLE!' : combo === 2 ? 'DOUBLE!' : 'LINE!';
+    void caption(word, PLAYER_COLORS[players[0]], mid.clone().addScaledVector(towardCamera(mid), 2.2), combo > 1 ? 2.5 + 0.2 * Math.min(3, combo - 1) : 2.7);
     await anim(0.25, (k) => beams.forEach((b) => b.scale.set(1.4 * (1 - k), 1, 1.4 * (1 - k))));
     for (const b of beams) {
       cube.remove(b);
@@ -428,20 +551,31 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     }
   }
 
-  async function twist(t: Twist): Promise<void> {
+  async function twist(t: Twist, p?: Player): Promise<void> {
     let ctx: TwistCtx;
+    let ring: any = null;
     if (preview && sameTwist(preview.t, t)) {
       ctx = preview;
       preview = null;
       const from = ctx.f;
-      await anim(0.12, (k) => turnTo(ctx, from + (1 - from) * k));
+      ring = streak(ctx, p);
+      await anim(0.12, (k) => {
+        turnTo(ctx, from + (1 - from) * k);
+        if (ring) ring.material.opacity = 0.9 * k;
+      });
     } else {
       if (preview) abandonTwist(preview);
       preview = null;
       ctx = beginTwist(t);
+      ring = streak(ctx, p);
       sfx.whoosh();
       await anim(0.46, (k) => {
         turnTo(ctx, ease.outBack(k));
+        if (ring) {
+          ring.material.opacity = 0.9 * Math.min(1, k * 4);
+          // Lag behind the layer at half speed: the paint smears along the turn.
+          ring.quaternion.copy(ring.userData.base).multiply(new T.Quaternion().setFromAxisAngle(new T.Vector3(0, 0, 1), -ctx.sign * (Math.PI / 4) * ease.outBack(k)));
+        }
         if (k < 0.85)
           for (const i of ctx.moving) {
             const s = shells[i];
@@ -450,6 +584,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       });
     }
     const { perm, moving, objs, pivot } = ctx;
+    if (ring) {
+      cube.attach(ring);
+      dropStreak(ring);
+    }
     objs.forEach((o) => cube.attach(o));
     cube.remove(pivot);
     haptics.turn();
@@ -479,9 +617,14 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const p = owners[cell];
     if (!s || p === null || s.userData.cracking) return;
     s.userData.cracking = true;
+    const overlay = new T.Mesh(shellGeo, crackMat);
+    overlay.scale.setScalar(1.012);
+    overlay.renderOrder = 2;
+    (s.userData.inner ?? s).add(overlay);
+    void anim(0.3, (k) => (overlay.scale.setScalar(0.9 + 0.112 * ease.outBack(k))));
     const dry = M.paint[p].clone();
     dry.color.set('#9d97a6');
-    s.children.forEach((m: any) => m.userData.body && (m.material = dry));
+    bodiesOf(s).forEach((m: any) => (m.material = dry));
     s.userData.dry = dry;
   }
 
@@ -490,7 +633,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const p = owners[cell];
     if (!s || p === null) return;
     const dry = s.userData.dry ?? M.paint[p].clone();
-    s.children.forEach((m: any) => m.userData.body && (m.material = dry));
+    bodiesOf(s).forEach((m: any) => (m.material = dry));
     const from = dry.color.clone();
     const to = new T.Color('#4a4452');
     sfx.crackle();
@@ -589,7 +732,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
           crack(e.cell);
           break;
         case 'twisted':
-          await twist(e.twist);
+          await twist(e.twist, e.player);
           break;
         case 'lineCompleted': {
           const lines: Line[] = [];
@@ -615,18 +758,46 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
           if (e.winner !== null && e.line && mode === 'rotating') await burstLines([e.line], [e.winner], 1, false);
           await drench(e.winner);
           break;
+        case 'matchWon':
+          await celebrate(e.winner);
+          break;
         default:
           break;
       }
     }
   }
 
-  function sync(cells: readonly Cell[]): void {
+  function sync(cells: readonly Cell[], cracking: readonly number[] = []): void {
+    clearTag();
+    showAim(null);
     for (let i = 0; i < CELLS; i++) {
       if (shells[i]) removeShell(i);
       const p = cells[i];
       if (p !== null) placeShell(i, p, false);
     }
+    cracking.forEach((c) => crack(c));
+  }
+
+  /** Match won: a beat of slow motion, confetti from both sides, and the winner's tag on the wall. */
+  async function celebrate(p: Player): Promise<void> {
+    const color = PLAYER_COLORS[p];
+    const colors = [color, color, '#f5e663', '#ffffff', color];
+    const n = calm ? 40 : 90;
+    clock.scale = 0.3;
+    hit({ bloom: 1.2, flash: 0.18, shake: 0.3 });
+    const base = camera.position.clone();
+    const right = new T.Vector3(1, 0, 0);
+    for (const side of [-1, 1]) {
+      const from = base.clone().addScaledVector(right, side * 2.8).add(new T.Vector3(0, -2.6, -3.2));
+      fx.confetti(from, new T.Vector3(-side * 0.35, 1, -0.45).normalize(), colors, n, 8);
+    }
+    fx.confetti(new T.Vector3(0, 4.5, 0), new T.Vector3(0, 0.2, 0.3).normalize(), colors, n / 2, 3);
+    void wallTag(board.names[p].toUpperCase(), color);
+    sfx.win();
+    haptics.win();
+    await wait(0.5 * 0.3);
+    clock.scale = 1;
+    await wait(1.1);
   }
 
   function setMode(m: Mode): void {
@@ -718,6 +889,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   const onDown = (e: PointerEvent) => {
     sfx.unlock();
+    showAim(pick(e.clientX, e.clientY)?.cell ?? null);
     dragging = true;
     moved = 0;
     lastX = e.clientX;
@@ -730,12 +902,20 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     }
   };
   const onMove = (e: PointerEvent) => {
-    if (!dragging) return;
+    if (!dragging) {
+      // A mouse hovering aims too.
+      if (e.pointerType === 'mouse') {
+        const c = pick(e.clientX, e.clientY)?.cell ?? null;
+        if ((c === null ? -1 : board.aimAt?.(c) ?? -1) !== aimCell) showAim(c);
+      }
+      return;
+    }
     const dx = e.clientX - lastX;
     const dy = e.clientY - lastY;
     lastX = e.clientX;
     lastY = e.clientY;
     moved += Math.abs(dx) + Math.abs(dy);
+    if (moved > 8 && aimCell >= 0) showAim(null);
     lastInput = now;
     if (grab) {
       const tx = e.clientX - grab.x0;
@@ -764,6 +944,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const onUp = (e: PointerEvent) => {
     if (!dragging) return;
     dragging = false;
+    if (e.pointerType !== 'mouse') showAim(null);
     if (grab?.ctx) {
       const ctx = grab.ctx;
       grab = null;
@@ -788,7 +969,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   host.addEventListener('pointerdown', onDown);
   host.addEventListener('pointermove', onMove);
   host.addEventListener('pointerup', onUp);
-  const onCancel = () => (dragging = false);
+  const onCancel = () => {
+    dragging = false;
+    showAim(null);
+  };
   host.addEventListener('pointercancel', onCancel);
 
   let shakeOff: [number, number, number] = [0, 0, 0];
@@ -807,14 +991,35 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       }
     }
     cube.rotation.set(pitch, yaw, 0, 'XYZ');
-    core.scale.setScalar(1 + Math.sin(now * 3) * 0.06);
+    // The Core breathes in the colour of whoever is to move.
+    const beat = turnP === null ? Math.sin(now * 3) : Math.pow(Math.max(0, Math.sin(now * 4.2)), 3) * 2 - 0.6;
+    core.scale.setScalar(1 + beat * 0.06);
     core.rotation.y += real * 0.8;
     core.rotation.x += real * 0.5;
-    M.core.emissiveIntensity = 2.2 + Math.sin(now * 3) * 0.5;
-    coreLight.intensity = 6 + Math.sin(now * 3) * 1.5;
-    for (const s of shells) {
-      if (s?.userData.cracking) s.rotation.z = Math.sin(now * 40) * 0.015;
+    coreTarget.set(turnP === null ? CORE_COLOR : PLAYER_COLORS[turnP]);
+    if (turnP !== null) coreTarget.lerp(coreGold, 0.25);
+    const kc = Math.min(1, real * 6);
+    M.core.emissive.lerp(coreTarget, kc);
+    M.core.color.lerp(coreTarget, kc);
+    coreLight.color.lerp(coreTarget, kc);
+    M.core.emissiveIntensity = 2.2 + beat * 0.5;
+    coreLight.intensity = 6 + beat * 1.5;
+    for (let i = 0; i < CELLS; i++) {
+      const s = shells[i];
+      if (!s) continue;
+      // Idle wobble (the paint is still a little wet); a mark about to fade shivers.
+      const inner = s.userData.inner;
+      if (!inner) continue;
+      inner.rotation.y = s.userData.cracking ? Math.sin(now * 40) * 0.02 : 0;
+      if (!calm) {
+        const ph = s.userData.phase;
+        inner.rotation.x = Math.sin(now * 1.7 + ph) * 0.04;
+        inner.rotation.z = Math.sin(now * 1.3 + ph * 1.9) * 0.04;
+        inner.position.y = Math.sin(now * 2.1 + ph * 0.7) * 0.012;
+      }
     }
+    if (aimHalo.visible) haloMat.opacity = 0.7 + 0.25 * Math.sin(now * 9);
+    pulse.punch *= Math.exp(-4 * real);
     pulse.bloom *= Math.exp(-5 * real);
     pulse.aberr *= Math.exp(-5 * real);
     pulse.flash *= Math.exp(-9 * real);
@@ -826,7 +1031,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const aspect = view.w / view.h;
     const v = (camera.fov * Math.PI) / 180;
     const hfov = 2 * Math.atan(Math.tan(v / 2) * aspect);
-    const dist = 2.4 / Math.sin(Math.min(v, hfov) / 2);
+    const dist = (2.4 / Math.sin(Math.min(v, hfov) / 2)) * (1 - (calm ? 0 : pulse.punch));
     camera.position.set(shakeOff[0], 0.9 + shakeOff[1], dist);
     camera.lookAt(0, 0.1, 0);
     camera.rotateZ(shakeOff[2]);
@@ -952,6 +1157,13 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       return tw.t;
     },
     attract: false,
+    aimAt: null,
+    aim: (c) => showAim(c),
+    names: ['P1', 'P2'],
+    setTurn(p) {
+      turnP = p;
+      if (p === null) showAim(null);
+    },
     setMode,
     sync,
     play,

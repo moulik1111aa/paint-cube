@@ -99,7 +99,7 @@ export function applyRotating(s: RotatingState, move: RotatingMove): { state: Ro
     const moves = cells.flatMap((c, from) => (c !== null && perm[from] !== from ? [{ from, to: perm[from] }] : []));
     cells = applyTwist(cells, move.twist);
     marks = [marks[0].map((c) => perm[c]), marks[1].map((c) => perm[c])];
-    events.push({ type: 'twisted', twist: { ...move.twist }, moves });
+    events.push({ type: 'twisted', twist: { ...move.twist }, moves, player: p });
   }
 
   const turns = s.turns + 1;
