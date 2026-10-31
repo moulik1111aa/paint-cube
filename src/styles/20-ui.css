@@ -298,3 +298,4 @@
 .help .row { justify-content: space-between; align-items: center; }
 .help .link { color: #0b0b12; text-shadow: none; }
 .help .btn { min-width: 150px; }
+.btn.resume { background: var(--p1); font-size: 15px; max-width: calc(100vw - 36px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

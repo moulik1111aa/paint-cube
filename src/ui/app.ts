@@ -13,7 +13,7 @@ import type { GameEvent, IllegalReason } from '../core/events.ts';
 import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
 import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
 import { rng } from '../core/rng.ts';
-import { cleanName, loadPrefs, savePrefs, type Prefs } from '../storage/prefs.ts';
+import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type Prefs } from '../storage/prefs.ts';
 import { haptics } from '../platform/haptics.ts';
 import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
 import { connectFirebase } from '../net/firebase.ts';
@@ -156,7 +156,7 @@ export function startApp(app: HTMLElement): void {
       enterDeep();
       return;
     }
-    if (screen === 'match' && !confirm(online ? 'Leave the room? The match ends.' : 'Leave this match?')) {
+    if (screen === 'match' && online && !confirm('Leave the room? The match ends.')) {
       enterDeep();
       return;
     }
@@ -205,11 +205,14 @@ export function startApp(app: HTMLElement): void {
   }
 
   function homeScreen(): void {
+    const saved = loadMatch();
     if (screen !== 'nickname') startDemo();
     show(
       'home',
       `<h1 class="sr-only">Paint Cube</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
-        '<div class="stack"><button class="btn big" data-go="local">Play local</button>' +
+        '<div class="stack">' +
+        (saved ? `<button class="btn big resume" data-go="resume">Resume · ${esc(saved.names[0])} vs ${esc(saved.names[1])} · R${saved.match.roundNumber}</button>` : '') +
+        '<button class="btn big" data-go="local">Play local</button>' +
         (onlineReady()
           ? '<button class="btn big alt" data-go="online">Play online</button></div>'
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
@@ -220,6 +223,12 @@ export function startApp(app: HTMLElement): void {
     void leaveOnline();
     ui.querySelector('[data-go="local"]')!.addEventListener('click', () => (sfx.unlock(), localSetup()));
     ui.querySelector('[data-go="online"]')?.addEventListener('click', () => (sfx.unlock(), onlineMenu()));
+    ui.querySelector('[data-go="resume"]')?.addEventListener('click', () => {
+      if (!saved) return;
+      sfx.unlock();
+      names = saved.names;
+      resumeMatch(saved.match);
+    });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
     ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
       prefs = { ...prefs, sound: !prefs.sound };
@@ -290,9 +299,28 @@ export function startApp(app: HTMLElement): void {
     ui.appendChild(overlay);
   }
 
+  function resumeMatch(m: MatchState): void {
+    stopDemo();
+    match = m;
+    busy = false;
+    if (board) {
+      board.attract = false;
+      board.setMode(m.mode);
+      board.sync(m.round.cells);
+    }
+    matchScreen();
+    if (m.round.result) roundOver();
+  }
+
+  /** Keep the local match on the device after every change. */
+  const persist = () => {
+    if (!online && match) saveMatch({ match, names });
+  };
+
   function startMatch(mode: Mode): void {
     stopDemo();
     match = newMatch(mode, 0);
+    saveMatch({ match, names });
     busy = false;
     if (board) {
       board.attract = false;
@@ -311,7 +339,7 @@ export function startApp(app: HTMLElement): void {
         '<p class="turn"></p>',
     );
     ui.querySelector('.back')!.addEventListener('click', () => {
-      if (confirm(online ? 'Leave the room? The match ends.' : 'Leave this match?')) homeScreen();
+      if (online ? confirm('Leave the room? The match ends.') : true) homeScreen();
     });
     ui.querySelector('.ask')!.addEventListener('click', () => match && help(match.mode));
     updateHud();
@@ -424,6 +452,7 @@ export function startApp(app: HTMLElement): void {
     board.twistEnabled = false;
     const out = applyMove(match, move);
     match = out.state;
+    persist();
     const turnEl = ui.querySelector('.turn') as HTMLElement | null;
     if (turnEl) turnEl.textContent = '';
     await board.play(out.events);
@@ -458,6 +487,7 @@ export function startApp(app: HTMLElement): void {
     }
     overlay.querySelector('[data-go="next"]')?.addEventListener('click', () => {
       match = nextRound(match!);
+      persist();
       board?.sync(match.round.cells);
       overlay.remove();
       updateHud();

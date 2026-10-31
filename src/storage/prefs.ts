@@ -2,7 +2,7 @@
 // last mode, and sound. Storage can be unavailable (private windows), so every access
 // is guarded and the app works without it.
 
-import type { Mode } from '../core/match.ts';
+import type { MatchState, Mode } from '../core/match.ts';
 
 export interface Prefs {
   nickname: string;
@@ -44,4 +44,30 @@ export function savePrefs(p: Prefs): void {
 /** Trim, collapse spaces, and cap a name at 14 characters. */
 export function cleanName(s: string): string {
   return s.replace(/\s+/g, ' ').trim().slice(0, 14);
+}
+
+/** A local match in progress, kept so it survives the app being closed. */
+export interface SavedMatch {
+  match: MatchState;
+  names: [string, string];
+}
+
+const MATCH_KEY = 'paintcube.local';
+
+export function loadMatch(): SavedMatch | null {
+  try {
+    const s = JSON.parse(localStorage.getItem(MATCH_KEY) ?? 'null');
+    return s && s.match && Array.isArray(s.names) && s.match.winner === null ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveMatch(s: SavedMatch | null): void {
+  try {
+    if (s && s.match.winner === null) localStorage.setItem(MATCH_KEY, JSON.stringify(s));
+    else localStorage.removeItem(MATCH_KEY);
+  } catch {
+    /* storage unavailable */
+  }
 }

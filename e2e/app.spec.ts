@@ -76,18 +76,24 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await expect(page.locator('.tagbox.p1 .score')).toHaveText('1 pts');
   expect(await page.evaluate(() => window.__game!.state()!.round.cells.slice(0, 3))).toEqual([null, null, null]);
 
-  // Back leaves the match (after asking), and the help is not shown again.
+  // Back leaves the match, which is saved: Resume brings it back as it was.
   await page.goBack();
   await expect(page.locator('.hello')).toContainText('Akshat');
+  await expect(page.locator('[data-go="resume"]')).toContainText('Akshat vs Riya · R1');
+  await page.click('[data-go="resume"]');
+  await expect(page.locator('.tagbox.p1 .score')).toHaveText('1 pts');
+  await page.click('.back');
+  // The help is not shown again.
   await page.click('[data-go="local"]');
   await page.click('[data-mode="cascade"]');
   await page.click('[data-go="start"]');
   await expect(page.locator('.help')).toHaveCount(0);
 
-  // Reload: the nickname is remembered.
+  // Reload (the app was closed): the nickname and the match in progress are remembered.
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready);
   await expect(page.locator('.hello')).toContainText('Akshat');
+  await expect(page.locator('[data-go="resume"]')).toBeVisible();
   expect(errors).toEqual([]);
 });
 
