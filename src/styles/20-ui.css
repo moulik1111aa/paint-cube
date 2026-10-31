@@ -37,7 +37,9 @@
   border: 3px solid #000;
   border-radius: 16px;
   padding: 15px 22px 14px;
-  min-width: 230px;
+  min-width: min(230px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  overflow-wrap: anywhere;
   font: 900 18px/1 'Inter Display', system-ui, sans-serif;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -201,7 +203,11 @@
   box-shadow: 0 3px 0 #000;
   transition: opacity 0.2s, transform 0.2s;
   pointer-events: none;
-  white-space: nowrap;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
+  text-align: center;
+  line-height: 1.25;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -216,7 +222,7 @@
   animation: pop 0.25s cubic-bezier(0.2, 1.6, 0.4, 1);
 }
 .confirm .btn { min-width: 0; }
-.confirm .btn[data-ok] { min-width: 170px; }
+.confirm .btn[data-ok] { min-width: min(170px, 60vw); max-width: calc(100vw - 110px); white-space: normal; }
 .build { pointer-events: auto; padding: 6px 10px; margin: 0; font-size: 11px; font-weight: 700; color: var(--ink-quiet); text-shadow: 0 1px 2px #000; }
 
 /* Online */

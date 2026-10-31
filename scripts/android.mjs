@@ -42,14 +42,21 @@ for (const dir of readdirSync(res)) {
 }
 cpSync(join(root, 'native/android/res'), res, { recursive: true });
 
-// 4. Manifest: portrait only, and vibration for haptics.
+// 3b. Native code: our MainActivity (text size, refresh rate, registers the plugin) and
+// the Paint Cube plugin (the phone's voice for the tutorials).
+const javaDir = join(android, 'app/src/main/java/com/paintcube/app');
+if (!existsSync(join(javaDir, 'MainActivity.java'))) throw new Error(`template MainActivity not found in ${javaDir}`);
+cpSync(join(root, 'native/android/java/com/paintcube/app'), javaDir, { recursive: true });
+
+// 4. Manifest: portrait only, vibration for haptics, and permission to find the phone's
+// text-to-speech engine (Android 11+ hides other apps' services otherwise).
 const manifestPath = join(android, 'app/src/main/AndroidManifest.xml');
 let manifest = readFileSync(manifestPath, 'utf8');
 manifest = patch(manifest, 'android:name=".MainActivity"', 'android:name=".MainActivity"\n            android:screenOrientation="portrait"');
 manifest = patch(
   manifest,
   '<uses-permission android:name="android.permission.INTERNET" />',
-  '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />',
+  '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />\n    <queries>\n        <intent>\n            <action android:name="android.intent.action.TTS_SERVICE" />\n        </intent>\n    </queries>',
 );
 writeFileSync(manifestPath, manifest);
 

@@ -169,6 +169,11 @@
   left: 50%;
   top: calc(env(safe-area-inset-top) + 128px);
   transform: translateX(-50%) rotate(-1deg);
+  /* Long instructions wrap inside the screen instead of running off it. */
+  width: max-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  line-height: 1.25;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -180,8 +185,10 @@
   font-weight: 900;
   font-size: 14px;
   box-shadow: 0 3px 0 #000;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: auto;
   z-index: 3;
 }
-.hint .x { width: 30px; height: 30px; border-radius: 8px; border: 2px solid #000; background: #0d0a14; color: #f4f1ea; font: 900 14px/1 'Inter Display', system-ui, sans-serif; }
+.hint span { flex: 1 1 auto; min-width: 0; }
+.hint .x { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 2px solid #000; background: #0d0a14; color: #f4f1ea; font: 900 14px/1 'Inter Display', system-ui, sans-serif; }
