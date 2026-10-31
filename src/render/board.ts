@@ -9,6 +9,7 @@ import { makeMaterials, roundedBox, PLAYER_COLORS, CORE_COLOR, type Materials } 
 import { wallTexture, groundTexture, graffitiCaption } from './street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from './fx3d.ts';
 import type { Sfx } from '../audio/sfx.ts';
+import { haptics } from '../platform/haptics.ts';
 import { CELLS, CENTER, coord, type Cell, type Line, type Player } from '../core/geometry.ts';
 import { permutation, sameTwist, type Twist, type Axis, type Slice } from '../core/twist.ts';
 import type { GameEvent } from '../core/events.ts';
@@ -222,10 +223,13 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   const pulse = { bloom: 0, aberr: 0, flash: 0 };
+  // Respect the phone's reduced-motion setting: much less shake, no colour split or flash.
+  const calm = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   const hit = (s: { freeze?: number; shake?: number; bloom?: number; aberr?: number; flash?: number }) => {
     clock.freeze = Math.max(clock.freeze, s.freeze ?? 0);
-    shake.add(s.shake ?? 0);
+    shake.add((s.shake ?? 0) * (calm ? 0.25 : 1));
     pulse.bloom = Math.max(pulse.bloom, s.bloom ?? 0);
+    if (calm) return;
     pulse.aberr = Math.max(pulse.aberr, s.aberr ?? 0);
     pulse.flash = Math.max(pulse.flash, s.flash ?? 0);
   };
@@ -259,6 +263,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const n = towardCamera(target);
     hit({ freeze: 0.06, shake: 0.32, bloom: 0.9, aberr: 0.006 });
     sfx.splat(0.9 + Math.random() * 0.2);
+    haptics.tap();
     fx.burst(target.clone().addScaledVector(n, 0.4), color, 18, 4.0, 0.06, n, 0.95);
     fx.mist(target.clone().addScaledVector(n, 0.45), color, 60, 5.5, n);
     fx.splat(target.clone().addScaledVector(n, 0.5), color, 1.7, 0.5);
@@ -343,6 +348,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     });
     hit({ freeze: 0.09, shake: 0.6 + 0.15 * wave, bloom: 1.4 + 0.3 * wave, aberr: 0.014 + 0.006 * wave, flash: 0.16 });
     sfx.burst(wave);
+    haptics.burst(wave);
     bodies.forEach((m: any, k: number) => (m.material = saved[k]));
     if (shatter) {
       for (const i of cells) {
@@ -438,6 +444,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const { perm, moving, objs, pivot } = ctx;
     objs.forEach((o) => cube.attach(o));
     cube.remove(pivot);
+    haptics.turn();
     for (const i of moving) {
       casings[i].position.copy(slot(i));
       casings[i].quaternion.identity();
@@ -524,6 +531,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     clock.scale = 0.35;
     hit({ bloom: 1.4, flash: 0.22, shake: 0.6, aberr: 0.015 });
     sfx.win();
+    haptics.win();
     fx.ring(toWorld(CENTER), color, 4.2, 0.8);
     void caption('WIN!', color, toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 3), 2.2);
     const jobs: Promise<void>[] = [];
@@ -887,6 +895,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     play,
     refuse(cell) {
       hit({ shake: 0.12 });
+      haptics.refuse();
       const s = shells[cell] ?? casings[cell];
       const base = s.position.clone();
       void anim(0.25, (k) => s.position.copy(base).add(new T.Vector3(Math.sin(k * 30) * 0.05 * (1 - k), 0, 0)));

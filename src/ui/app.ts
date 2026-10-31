@@ -14,6 +14,7 @@ import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, 
 import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
 import { rng } from '../core/rng.ts';
 import { cleanName, loadPrefs, savePrefs, type Prefs } from '../storage/prefs.ts';
+import { haptics } from '../platform/haptics.ts';
 
 declare global {
   interface Window {
@@ -53,6 +54,7 @@ export function startApp(app: HTMLElement): void {
   const sfx = new Sfx();
   let prefs: Prefs = loadPrefs();
   sfx.enabled = prefs.sound;
+  haptics.enabled = prefs.sound;
   let board: Board | null = null;
   let screen = 'loading';
   let match: MatchState | null = null;
@@ -139,13 +141,15 @@ export function startApp(app: HTMLElement): void {
         '<div class="stack"><button class="btn big" data-go="local">Play local</button>' +
         '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>' +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
-        `<button class="link" data-go="sound">Sound: ${prefs.sound ? 'on' : 'off'}</button></div>`,
+        `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button></div>` +
+        `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
     ui.querySelector('[data-go="local"]')!.addEventListener('click', () => (sfx.unlock(), localSetup()));
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
     ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
       prefs = { ...prefs, sound: !prefs.sound };
       sfx.enabled = prefs.sound;
+      haptics.enabled = prefs.sound;
       savePrefs(prefs);
       homeScreen();
     });

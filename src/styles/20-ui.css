@@ -217,3 +217,4 @@
 }
 .confirm .btn { min-width: 0; }
 .confirm .btn[data-ok] { min-width: 170px; }
+.build { margin: 0; font-size: 11px; font-weight: 700; color: var(--ink-quiet); text-shadow: 0 1px 2px #000; }
