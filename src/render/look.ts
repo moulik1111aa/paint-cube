@@ -56,44 +56,121 @@ function rand(seed: number): () => number {
   };
 }
 
-/** A white paint splat on transparent: a lumpy core, arms, and flung droplets. */
+/** A white spray-paint splat: a fuzzy core, speckled overspray, and drips running down. */
 export function splatTexture(T: Three, seed: number, size = 256): any {
   const [c, g] = canvas(size, size);
   const r = rand(seed + 1);
   const m = size / 2;
   g.fillStyle = '#fff';
+  // Core: a lumpy blob.
   g.beginPath();
-  const lobes = 14;
+  const lobes = 16;
   for (let i = 0; i <= lobes; i++) {
     const a = (i / lobes) * Math.PI * 2;
-    const rr = size * (0.2 + r() * 0.08);
+    const rr = size * (0.16 + r() * 0.08);
     const x = m + Math.cos(a) * rr;
-    const y = m + Math.sin(a) * rr;
+    const y = m * 0.9 + Math.sin(a) * rr;
     if (i === 0) g.moveTo(x, y);
-    else g.quadraticCurveTo(m + Math.cos(a - 0.2) * rr * 1.25, m + Math.sin(a - 0.2) * rr * 1.25, x, y);
+    else g.quadraticCurveTo(m + Math.cos(a - 0.2) * rr * 1.3, m * 0.9 + Math.sin(a - 0.2) * rr * 1.3, x, y);
   }
   g.fill();
-  for (let i = 0; i < 9; i++) {
+  // Overspray: dense specks fading out from the core.
+  for (let i = 0; i < 1400; i++) {
     const a = r() * Math.PI * 2;
-    const len = size * (0.18 + r() * 0.22);
-    const w = size * (0.025 + r() * 0.035);
-    g.lineCap = 'round';
+    const d = size * (0.16 + Math.pow(r(), 1.8) * 0.3);
+    g.globalAlpha = 0.25 + r() * 0.75;
+    g.beginPath();
+    g.arc(m + Math.cos(a) * d, m * 0.9 + Math.sin(a) * d, 0.6 + r() * 1.8, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.globalAlpha = 1;
+  // Drips run down the screen.
+  g.lineCap = 'round';
+  for (let i = 0; i < 4; i++) {
+    const x = m + (r() - 0.5) * size * 0.32;
+    const y0 = m * 0.9 + size * 0.1;
+    const len = size * (0.12 + r() * 0.26);
+    const w = size * (0.018 + r() * 0.02);
     g.lineWidth = w;
     g.strokeStyle = '#fff';
     g.beginPath();
-    g.moveTo(m + Math.cos(a) * size * 0.15, m + Math.sin(a) * size * 0.15);
-    g.lineTo(m + Math.cos(a) * len, m + Math.sin(a) * len);
+    g.moveTo(x, y0);
+    g.lineTo(x, y0 + len);
     g.stroke();
     g.beginPath();
-    g.arc(m + Math.cos(a) * len, m + Math.sin(a) * len, w * 0.9, 0, Math.PI * 2);
+    g.arc(x, y0 + len, w * 0.85, 0, Math.PI * 2);
     g.fill();
   }
-  for (let i = 0; i < 22; i++) {
-    const a = r() * Math.PI * 2;
-    const d = size * (0.3 + r() * 0.18);
-    g.beginPath();
-    g.arc(m + Math.cos(a) * d, m + Math.sin(a) * d, size * (0.006 + r() * 0.018), 0, Math.PI * 2);
-    g.fill();
+  const t = new T.CanvasTexture(c);
+  t.colorSpace = T.SRGBColorSpace;
+  return t;
+}
+
+/**
+ * A spray-painted fill for one face of a paint shell: a fade from a lighter tint at the
+ * top to the base colour, spray grain, a darker overspray rim, and the classic white
+ * graffiti shine (two diagonal strokes and a sparkle) in the top-left corner.
+ */
+export function sprayFillTexture(T: Three, base: string, light: string, seed: number, size = 256): any {
+  const [c, g] = canvas(size, size);
+  const r = rand(seed + 5);
+  const gr = g.createLinearGradient(0, 0, size * 0.3, size);
+  gr.addColorStop(0, light);
+  gr.addColorStop(0.65, base);
+  gr.addColorStop(1, base);
+  g.fillStyle = gr;
+  g.fillRect(0, 0, size, size);
+  // Grain: light and dark specks, like a can sprayed from a distance.
+  for (let i = 0; i < 2600; i++) {
+    g.fillStyle = r() < 0.5 ? `rgba(255,255,255,${r() * 0.18})` : `rgba(0,0,0,${r() * 0.16})`;
+    const s = 0.8 + r() * 2.2;
+    g.fillRect(r() * size, r() * size, s, s);
+  }
+  // Overspray rim: a soft dark band at the edges.
+  const rim = g.createRadialGradient(size / 2, size / 2, size * 0.32, size / 2, size / 2, size * 0.74);
+  rim.addColorStop(0, 'rgba(0,0,0,0)');
+  rim.addColorStop(1, 'rgba(10,5,20,0.45)');
+  g.fillStyle = rim;
+  g.fillRect(0, 0, size, size);
+  // Shine.
+  g.strokeStyle = 'rgba(255,255,255,0.92)';
+  g.lineCap = 'round';
+  g.lineWidth = size * 0.07;
+  g.beginPath();
+  g.moveTo(size * 0.2, size * 0.42);
+  g.lineTo(size * 0.42, size * 0.2);
+  g.stroke();
+  g.lineWidth = size * 0.035;
+  g.beginPath();
+  g.moveTo(size * 0.2, size * 0.56);
+  g.lineTo(size * 0.3, size * 0.46);
+  g.stroke();
+  const sx = size * 0.62;
+  const sy = size * 0.18;
+  const sr = size * 0.07;
+  g.fillStyle = 'rgba(255,255,255,0.95)';
+  g.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const rr = i % 2 ? sr * 0.22 : sr;
+    g.lineTo(sx + Math.cos(a) * rr, sy + Math.sin(a) * rr);
+  }
+  g.fill();
+  const t = new T.CanvasTexture(c);
+  t.colorSpace = T.SRGBColorSpace;
+  return t;
+}
+
+/** Subtle concrete grain for the blank blocks (the "wall" the paint goes on). */
+export function concreteTexture(T: Three, size = 256): any {
+  const [c, g] = canvas(size, size);
+  const r = rand(77);
+  g.fillStyle = '#b4afc4';
+  g.fillRect(0, 0, size, size);
+  for (let i = 0; i < 3000; i++) {
+    g.fillStyle = r() < 0.5 ? `rgba(0,0,0,${r() * 0.1})` : `rgba(255,255,255,${r() * 0.12})`;
+    const s = 0.7 + r() * 2.5;
+    g.fillRect(r() * size, r() * size, s, s);
   }
   const t = new T.CanvasTexture(c);
   t.colorSpace = T.SRGBColorSpace;
@@ -133,6 +210,7 @@ export interface Materials {
   casingEdge: any;
   core: any;
   paint: [any, any];
+  drip: [any, any];
   ink: any;
   drop: any;
   ramp: any;
@@ -142,12 +220,17 @@ export function makeMaterials(T: Three, env: any): Materials {
   const ramp = toonRamp(T);
   return {
     ramp,
-    casing: new T.MeshStandardMaterial({ color: '#a9a4bb', roughness: 0.7, metalness: 0.0, envMap: env, envMapIntensity: 0.45 }),
+    casing: new T.MeshStandardMaterial({ color: '#ffffff', map: concreteTexture(T), roughness: 0.8, metalness: 0.0, envMap: env, envMapIntensity: 0.4 }),
     casingEdge: new T.MeshBasicMaterial({ color: '#5b4fd6', transparent: true, opacity: 0.55 }),
     core: new T.MeshStandardMaterial({ color: CORE_COLOR, emissive: CORE_COLOR, emissiveIntensity: 2.4, roughness: 0.3 }),
     paint: [
-      new T.MeshToonMaterial({ color: PAINT.orange, gradientMap: ramp, emissive: PAINT.orange, emissiveIntensity: 0.05 }),
-      new T.MeshToonMaterial({ color: PAINT.blue, gradientMap: ramp, emissive: PAINT.blue, emissiveIntensity: 0.05 }),
+      new T.MeshToonMaterial({ color: '#ffffff', map: sprayFillTexture(T, PAINT.orange, '#ffc23d', 1), gradientMap: ramp, emissive: PAINT.orange, emissiveIntensity: 0.04 }),
+      new T.MeshToonMaterial({ color: '#ffffff', map: sprayFillTexture(T, PAINT.blue, '#7ff0ff', 2), gradientMap: ramp, emissive: PAINT.blue, emissiveIntensity: 0.04 }),
+    ],
+    /** Plain paint for drips and paintballs (no shine strokes). */
+    drip: [
+      new T.MeshToonMaterial({ color: PAINT.orange, gradientMap: ramp }),
+      new T.MeshToonMaterial({ color: PAINT.blue, gradientMap: ramp }),
     ],
     ink: new T.MeshBasicMaterial({ color: INK, side: T.BackSide }),
     drop: new T.MeshToonMaterial({ color: '#ffffff', gradientMap: ramp }),

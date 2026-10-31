@@ -280,3 +280,12 @@ export function burstTexture(T: Three, text: string, fill = '#f5e663'): any {
   t.colorSpace = T.SRGBColorSpace;
   return t;
 }
+
+/** A graffiti caption: dripping bubble letters with an outline, 3D shadow and shine (2:1). */
+export function graffitiCaption(T: Three, text: string, fill: string): any {
+  const [c, g] = canvas(1024, 512);
+  bubbleText(g, text, 512, 230, text.length > 4 ? 210 : 250, fill, seeded(text.length * 13 + 7), -0.08);
+  const t = new T.CanvasTexture(c);
+  t.colorSpace = T.SRGBColorSpace;
+  return t;
+}

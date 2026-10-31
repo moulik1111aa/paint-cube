@@ -124,7 +124,7 @@ void main(){
   col *= mix(1.0, smoothstep(0.95, 0.25, length(d * vec2(res.x / res.y, 1.0))), vignette);
   // Paper: low-frequency fibers plus fine grain.
   col *= 0.94 + 0.06 * noise(vUv * res / 3.0);
-  col += (hash(vUv * res + time) - 0.5) * 0.02;
+  col += (hash(vUv * res + time) - 0.5) * 0.035;
   col = pow(max(col, 0.0), vec3(1.0 / 2.2));
   gl_FragColor = vec4(col, 1.0);
 }`;
@@ -136,9 +136,9 @@ export class Post {
   exposure = 1.0;
   vignette = 0.6;
   /** 0 = plain render, 1 = full oil-paint filter. */
-  painterly = 0.85;
+  painterly = 0.3;
   ink = 1;
-  halftone = 1;
+  halftone = 0.35;
   private readonly r: any;
   private readonly sceneRT: any;
   private readonly normalRT: any;

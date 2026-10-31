@@ -6,7 +6,7 @@
 import { loadThree, makeRenderer, RenderLoop, softEnv, disposeAll, type Three } from '../render/three.ts';
 import { Post } from '../render/post.ts';
 import { makeMaterials, roundedBox, PLAYER_COLORS, CORE_COLOR, type Materials } from '../render/look.ts';
-import { wallTexture, groundTexture, burstTexture, fontsReady } from '../render/street.ts';
+import { wallTexture, groundTexture, graffitiCaption, fontsReady } from '../render/street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from '../render/fx3d.ts';
 import { Sfx } from '../audio/sfx.ts';
 import { CELLS, CENTER, LINES, coord, type Line, type Player } from '../core/geometry.ts';
@@ -166,7 +166,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     body.castShadow = true;
     body.receiveShadow = true;
     const hull = new T.Mesh(shellGeo, M.ink);
-    hull.scale.setScalar(1.07);
+    hull.scale.setScalar(1.1);
     g.add(hull, body);
     let s = seed * 7919 + 13;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
@@ -178,7 +178,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
       pos.setComponent(free[0], (rnd() - 0.5) * 0.5);
       pos.setComponent(free[1], (rnd() - 0.5) * 0.5);
       const rad = 0.06 + rnd() * 0.05;
-      const drip = new T.Mesh(dripGeo, M.paint[p]);
+      const drip = new T.Mesh(dripGeo, M.drip[p]);
       drip.position.copy(pos);
       drip.scale.setScalar(rad);
       const dh = new T.Mesh(dripGeo, M.ink);
@@ -212,8 +212,8 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
       const g = new T.Group();
       g.position.copy(start);
       g.quaternion.setFromUnitVectors(new T.Vector3(0, -1, 0), run);
-      const rod = new T.Mesh(dripRod, M.paint[p]);
-      const tip = new T.Mesh(dripGeo, M.paint[p]);
+      const rod = new T.Mesh(dripRod, M.drip[p]);
+      const tip = new T.Mesh(dripGeo, M.drip[p]);
       rod.scale.set(w, 0.001, w);
       tip.scale.setScalar(w * 1.5);
       g.add(rod, tip);
@@ -230,7 +230,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
   const captionTex = new Map<string, any>();
   async function caption(text: string, fill: string, at: any, size: number): Promise<void> {
     const key = text + fill;
-    if (!captionTex.has(key)) captionTex.set(key, burstTexture(T, text, fill));
+    if (!captionTex.has(key)) captionTex.set(key, graffitiCaption(T, text, fill));
     const s = new T.Sprite(new T.SpriteMaterial({ map: captionTex.get(key), transparent: true, depthTest: false, depthWrite: false }));
     s.layers.set(1);
     s.renderOrder = 20;
@@ -238,13 +238,13 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     world.add(s);
     await anim(0.22, (k) => {
       const g = size * ease.outBack(k);
-      s.scale.set(g, g, 1);
+      s.scale.set(g * 2, g, 1);
       s.material.rotation = (1 - k) * 0.5;
     });
     await anim(0.55, (k) => (s.material.rotation = Math.sin(k * 9) * 0.03));
     await anim(0.25, (k) => {
       s.material.opacity = 1 - k;
-      s.scale.setScalar(size * (1 + k * 0.15));
+      s.scale.set(size * 2 * (1 + k * 0.15), size * (1 + k * 0.15), 1);
     });
     world.remove(s);
     s.material.dispose();
@@ -275,7 +275,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
       const start = camera.position.clone().add(new T.Vector3(0.9 - p * 1.8, -1.6, -1.2));
       const mid = start.clone().lerp(target, 0.5).add(new T.Vector3(0, 1.3, 0));
       const orb = new T.Group();
-      const ballMesh = new T.Mesh(dripGeo, M.paint[p]);
+      const ballMesh = new T.Mesh(dripGeo, M.drip[p]);
       const ballInk = new T.Mesh(dripGeo, M.ink);
       ballInk.scale.setScalar(1.18);
       orb.add(ballInk, ballMesh);
@@ -300,7 +300,8 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     const n = towardCamera(target);
     hit({ freeze: 0.06, shake: 0.32, bloom: 0.9, aberr: 0.006 });
     sfx.splat(0.9 + Math.random() * 0.2);
-    fx.burst(target.clone().addScaledVector(n, 0.4), color, 34, 4.4, 0.065, n, 0.95);
+    fx.burst(target.clone().addScaledVector(n, 0.4), color, 18, 4.0, 0.06, n, 0.95);
+    fx.mist(target.clone().addScaledVector(n, 0.45), color, 60, 5.5, n);
     fx.splat(target.clone().addScaledVector(n, 0.5), color, 1.7, 0.5);
     fx.ring(target.clone().addScaledVector(n, 0.45), color, 1.9, 0.32);
     const shell = makeShell(p, cell + order.length * 31);
@@ -344,10 +345,11 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     hit({ freeze: 0.09, shake: 0.75, bloom: 1.6, aberr: 0.018, flash: 0.18 });
     sfx.burst(wave);
     const mid = toWorld(line[1]);
-    void caption(wave > 1 ? `x${wave}!` : 'LINE!', '#f5e663', mid.clone().addScaledVector(towardCamera(mid), 2.2), 3.4);
+    void caption(wave > 1 ? `x${wave}!` : 'LINE!', '#f5e663', mid.clone().addScaledVector(towardCamera(mid), 2.2), 2.7);
     for (const i of line) {
       const pos = toWorld(i);
-      fx.burst(pos, color, 70, 6.8, 0.085);
+      fx.burst(pos, color, 40, 6.5, 0.08);
+      fx.mist(pos, color, 90, 8);
       fx.splat(pos.clone().addScaledVector(towardCamera(pos), 0.6), color, 2.6, 0.7);
       fx.ring(pos, color, 2.4, 0.45);
       removeShell(i);
@@ -433,7 +435,7 @@ function scene(T: Three, root: HTMLElement, stage: HTMLElement, manual: boolean)
     hit({ bloom: 1.4, flash: 0.22, shake: 0.6, aberr: 0.015 });
     sfx.win();
     fx.ring(toWorld(CENTER), color, 4.2, 0.8);
-    void caption('WIN!', '#ff3d8b', toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 3), 3.4);
+    void caption('WIN!', color, toWorld(CENTER).addScaledVector(towardCamera(toWorld(CENTER)), 3), 2.2);
     const jobs: Promise<void>[] = [];
     for (let i = 0; i < CELLS; i++) {
       if (i === CENTER) continue;

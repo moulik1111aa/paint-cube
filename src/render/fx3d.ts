@@ -149,6 +149,11 @@ export class Fx {
     this.drops.instanceColor.needsUpdate = true;
   }
 
+  /** Fine spray mist: many tiny, fast specks with a short life. */
+  mist(pos: any, color: string, count: number, speed: number, dir?: any): void {
+    this.burst(pos, color, count, speed, 0.018, dir, 0.7, 0.55);
+  }
+
   /** Dry paint flaking off: flat shards that tumble and fall. */
   flakes(pos: any, color: string, count: number, size: number): void {
     const n = Math.round(count * this.budget);
