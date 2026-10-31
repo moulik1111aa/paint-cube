@@ -12,7 +12,8 @@
     "serve": "node scripts/serve.mjs",
     "e2e": "playwright test",
     "check": "npm run typecheck && npm test && npm run build && npm run e2e",
-    "android": "node scripts/android.mjs"
+    "android": "node scripts/android.mjs",
+    "simulate": "node scripts/simulate.ts"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
