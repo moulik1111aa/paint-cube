@@ -8,6 +8,7 @@ import { createBoard, type Board } from '../render/board.ts';
 import { fontsReady } from '../render/street.ts';
 import { Sfx } from '../audio/sfx.ts';
 import { coord, type Player } from '../core/geometry.ts';
+import type { Twist } from '../core/twist.ts';
 import type { IllegalReason } from '../core/events.ts';
 import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Mode, type Move } from '../core/match.ts';
 import { rotatingBotMove, cascadeBotMove } from '../sim/bot.ts';
@@ -22,6 +23,7 @@ declare global {
       screen: () => string;
       tap: (cell: number) => Promise<void>;
       busy: () => boolean;
+      swipe: (cell: number, dx: number, dy: number) => boolean;
       advance: (sec: number, draw?: boolean) => void;
       state: () => MatchState | null;
     };
@@ -99,6 +101,7 @@ export function startApp(app: HTMLElement): void {
   function stopDemo(): void {
     clearTimeout(demoTimer);
     demo = null;
+    if (board) board.twistEnabled = false;
   }
 
   // ---- screens ----
@@ -215,7 +218,39 @@ export function startApp(app: HTMLElement): void {
     (ui.querySelector('.round') as HTMLElement).textContent = `R${match.roundNumber}`;
     const turn = ui.querySelector('.turn') as HTMLElement;
     turn.className = `turn ${COLORS[r.turn]}`;
-    turn.textContent = r.result ? '' : `${names[r.turn]} · ${r.mode === 'rotating' ? 'tap a cell to paint it' : 'tap a column to drop'}`;
+    turn.textContent = r.result ? '' : `${names[r.turn]} · ${r.mode === 'rotating' ? 'tap to paint · swipe to twist' : 'tap a column to drop'}`;
+    if (board) board.twistEnabled = r.mode === 'rotating' && !r.result && !busy;
+  }
+
+  // Twists: a swipe on the cube asks first, then holds a preview until confirmed.
+  function onTwistIntent(t: Twist): boolean {
+    if (!match || screen !== 'match' || busy || match.round.result) return false;
+    const why = checkMove(match, { kind: 'twist', twist: t });
+    if (why) {
+      toast(REASONS[why] ?? 'Not allowed.');
+      return false;
+    }
+    return true;
+  }
+  function onTwistReady(t: Twist): void {
+    const bar = document.createElement('div');
+    bar.className = 'confirm';
+    bar.innerHTML = '<button class="btn" data-ok>✓ Twist</button><button class="btn alt" data-no aria-label="Cancel twist">✕</button>';
+    ui.querySelector('.screen')?.appendChild(bar);
+    const turnEl = ui.querySelector('.turn') as HTMLElement | null;
+    if (turnEl) turnEl.style.visibility = 'hidden';
+    const close = () => {
+      bar.remove();
+      if (turnEl) turnEl.style.visibility = '';
+    };
+    bar.querySelector('[data-ok]')!.addEventListener('click', () => {
+      close();
+      void doMove({ kind: 'twist', twist: t });
+    });
+    bar.querySelector('[data-no]')!.addEventListener('click', () => {
+      close();
+      void board?.cancelTwist();
+    });
   }
 
   async function onTap(cell: number): Promise<void> {
@@ -227,7 +262,13 @@ export function startApp(app: HTMLElement): void {
       toast(REASONS[why] ?? 'Not allowed.');
       return;
     }
+    await doMove(move);
+  }
+
+  async function doMove(move: Move): Promise<void> {
+    if (!match || !board || busy || checkMove(match, move)) return;
     busy = true;
+    board.twistEnabled = false;
     const out = applyMove(match, move);
     match = out.state;
     const turnEl = ui.querySelector('.turn') as HTMLElement | null;
@@ -267,6 +308,8 @@ export function startApp(app: HTMLElement): void {
     .then(([T]) => {
       board = createBoard(T, stage, sfx, manual);
       board.onTap = (c) => void onTap(c);
+      board.onTwistIntent = onTwistIntent;
+      board.onTwistReady = onTwistReady;
       root.dataset.threeD = 'ok';
     })
     .catch((e) => {
@@ -282,6 +325,7 @@ export function startApp(app: HTMLElement): void {
         screen: () => screen,
         tap: (c) => onTap(c),
         busy: () => busy,
+        swipe: (c, dx, dy) => !!board?.swipe(c, dx, dy),
         advance: (sec, draw = true) => board?.advance(sec, draw),
         state: () => match,
       };

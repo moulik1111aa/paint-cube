@@ -204,3 +204,16 @@
   white-space: nowrap;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+.confirm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(env(safe-area-inset-bottom) + 22px);
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  animation: pop 0.25s cubic-bezier(0.2, 1.6, 0.4, 1);
+}
+.confirm .btn { min-width: 0; }
+.confirm .btn[data-ok] { min-width: 170px; }

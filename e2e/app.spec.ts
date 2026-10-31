@@ -75,3 +75,43 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await expect(page.locator('.hello')).toContainText('Akshat');
   expect(errors).toEqual([]);
 });
+
+test('twisting: swipe, confirm, refused when you twisted last turn, cancel changes nothing', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: 'Riya', mode: 'rotating', sound: false })));
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="local"]');
+  await page.click('[data-go="start"]');
+
+  await tap(page, 0); // Akshat paints a corner
+
+  // Riya swipes across the top of a corner cell: a preview holds, then she confirms.
+  expect(await page.evaluate(() => window.__game!.swipe(18, 140, 0))).toBe(true);
+  await expect(page.locator('.confirm [data-ok]')).toBeVisible();
+  await page.click('.confirm [data-ok]');
+  await settle(page);
+  const after = await page.evaluate(() => window.__game!.state()!.round);
+  expect(after.mode).toBe('rotating');
+  expect((after as { lastTwist: unknown }).lastTwist).not.toBeNull();
+  expect((after as { twistedLast: boolean[] }).twistedLast[1]).toBe(true);
+
+  // Akshat paints; Riya cannot twist again straight away.
+  const empty = await page.evaluate(() => window.__game!.state()!.round.cells.findIndex((c, i) => c === null && i !== 13));
+  await tap(page, empty);
+  expect(await page.evaluate(() => window.__game!.swipe(18, 140, 0))).toBe(false);
+  await expect(page.locator('.toast')).toContainText('twisted last turn');
+  await expect(page.locator('.confirm')).toHaveCount(0);
+
+  // Riya paints instead; Akshat starts a twist and cancels: nothing changes.
+  const empty2 = await page.evaluate(() => window.__game!.state()!.round.cells.findIndex((c, i) => c === null && i !== 13));
+  await tap(page, empty2);
+  const before = await page.evaluate(() => JSON.stringify(window.__game!.state()));
+  expect(await page.evaluate(() => window.__game!.swipe(2, 0, 140))).toBe(true);
+  await page.click('.confirm [data-no]');
+  await settle(page);
+  expect(await page.evaluate(() => JSON.stringify(window.__game!.state()))).toBe(before);
+  expect(errors).toEqual([]);
+});

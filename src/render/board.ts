@@ -10,7 +10,7 @@ import { wallTexture, groundTexture, graffitiCaption } from './street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from './fx3d.ts';
 import type { Sfx } from '../audio/sfx.ts';
 import { CELLS, CENTER, coord, type Cell, type Line, type Player } from '../core/geometry.ts';
-import { permutation, type Twist } from '../core/twist.ts';
+import { permutation, sameTwist, type Twist, type Axis, type Slice } from '../core/twist.ts';
 import type { GameEvent } from '../core/events.ts';
 import type { Mode } from '../core/match.ts';
 
@@ -20,6 +20,16 @@ const CELL = 0.8;
 export interface Board {
   /** Called with a cell index when the player taps a cell. */
   onTap: ((cell: number) => void) | null;
+  /** Swipe on the cube picked a twist: return false (and explain) to refuse it. */
+  onTwistIntent: ((t: Twist) => boolean) | null;
+  /** The swiped layer is held at a quarter turn, waiting for confirm or cancel. */
+  onTwistReady: ((t: Twist) => void) | null;
+  /** Whether swipes on the cube twist layers (rotating mode, player's turn). */
+  twistEnabled: boolean;
+  /** Animate a held preview back to where it was. */
+  cancelTwist(): Promise<void>;
+  /** Start a twist preview from a swipe (tests): cell, then a swipe in screen pixels. */
+  swipe(cell: number, dx: number, dy: number): Twist | null;
   setMode(mode: Mode): void;
   /** Show these cells immediately, without animation. */
   sync(cells: readonly Cell[]): void;
@@ -357,25 +367,75 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     flashMat.dispose();
   }
 
-  async function twist(t: Twist): Promise<void> {
+  const AXES = [new T.Vector3(1, 0, 0), new T.Vector3(0, 0, 1), new T.Vector3(0, 1, 0)];
+  interface TwistCtx {
+    t: Twist;
+    perm: readonly number[];
+    axisVec: any;
+    sign: number;
+    moving: number[];
+    pivot: any;
+    objs: any[];
+    /** 0..1 of a quarter turn. */
+    f: number;
+  }
+  let preview: TwistCtx | null = null;
+
+  /** The board's turn direction (about the three.js axis) that carries cells where the rules say. */
+  function twistSign(t: Twist): number {
     const perm = permutation(t);
-    const axisVec = [new T.Vector3(1, 0, 0), new T.Vector3(0, 0, 1), new T.Vector3(0, 1, 0)][t.axis];
     const moving = Array.from({ length: CELLS }, (_, i) => i).filter((i) => coord(i)[t.axis] === t.slice && i !== CENTER);
     const probe = moving.find((i) => perm[i] !== i)!;
-    const sign = slot(probe).applyAxisAngle(axisVec, Math.PI / 2).distanceTo(slot(perm[probe])) < 0.01 ? 1 : -1;
+    return slot(probe).applyAxisAngle(AXES[t.axis], Math.PI / 2).distanceTo(slot(perm[probe])) < 0.01 ? 1 : -1;
+  }
+
+  function beginTwist(t: Twist): TwistCtx {
+    const moving = Array.from({ length: CELLS }, (_, i) => i).filter((i) => coord(i)[t.axis] === t.slice && i !== CENTER);
     const pivot = new T.Group();
     cube.add(pivot);
     const objs = moving.flatMap((i) => [casings[i], shells[i]].filter(Boolean));
     objs.forEach((o) => pivot.attach(o));
-    sfx.whoosh();
-    await anim(0.46, (k) => {
-      pivot.quaternion.setFromAxisAngle(axisVec, sign * (Math.PI / 2) * ease.outBack(k));
-      if (k < 0.85)
-        for (const i of moving) {
-          const s = shells[i];
-          if (s) fx.mist(s.getWorldPosition(new T.Vector3()), PLAYER_COLORS[owners[i]!], 2, 0.7);
-        }
-    });
+    return { t, perm: permutation(t), axisVec: AXES[t.axis], sign: twistSign(t), moving, pivot, objs, f: 0 };
+  }
+
+  function turnTo(ctx: TwistCtx, f: number): void {
+    ctx.f = f;
+    ctx.pivot.quaternion.setFromAxisAngle(ctx.axisVec, ctx.sign * (Math.PI / 2) * f);
+  }
+
+  /** Put the layer back without turning it (a cancelled preview). */
+  function abandonTwist(ctx: TwistCtx): void {
+    ctx.objs.forEach((o) => cube.attach(o));
+    cube.remove(ctx.pivot);
+    for (const i of ctx.moving) {
+      casings[i].position.copy(slot(i));
+      casings[i].quaternion.identity();
+      if (shells[i]) shells[i].position.copy(slot(i));
+    }
+  }
+
+  async function twist(t: Twist): Promise<void> {
+    let ctx: TwistCtx;
+    if (preview && sameTwist(preview.t, t)) {
+      ctx = preview;
+      preview = null;
+      const from = ctx.f;
+      await anim(0.12, (k) => turnTo(ctx, from + (1 - from) * k));
+    } else {
+      if (preview) abandonTwist(preview);
+      preview = null;
+      ctx = beginTwist(t);
+      sfx.whoosh();
+      await anim(0.46, (k) => {
+        turnTo(ctx, ease.outBack(k));
+        if (k < 0.85)
+          for (const i of ctx.moving) {
+            const s = shells[i];
+            if (s) fx.mist(s.getWorldPosition(new T.Vector3()), PLAYER_COLORS[owners[i]!], 2, 0.7);
+          }
+      });
+    }
+    const { perm, moving, objs, pivot } = ctx;
     objs.forEach((o) => cube.attach(o));
     cube.remove(pivot);
     for (const i of moving) {
@@ -581,6 +641,65 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   let now = 0;
   const ray = new T.Raycaster();
   ray.layers.enableAll();
+  /** The cell (and the hit point in cube space) under a screen point, if any. */
+  function pick(clientX: number, clientY: number): { cell: number; local: any } | null {
+    const rect = host.getBoundingClientRect();
+    ray.setFromCamera(new T.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1), camera);
+    const targets = [...casings.filter((c) => c.visible), ...shells.filter(Boolean)];
+    const hitObj = ray.intersectObjects(targets, true)[0];
+    if (!hitObj) return null;
+    let o = hitObj.object;
+    while (o && o.userData.cell === undefined && !shells.includes(o)) o = o.parent;
+    const cell = o?.userData.cell ?? shells.indexOf(o);
+    if (cell < 0) return null;
+    cube.updateMatrixWorld();
+    return { cell, local: cube.worldToLocal(hitObj.point.clone()) };
+  }
+
+  /** Screen-space direction (pixels) of moving from a cell along a cube-space axis. */
+  function screenDir(cell: number, axis: any): [number, number] {
+    cube.updateMatrixWorld();
+    const a = cube.localToWorld(slot(cell)).project(camera);
+    const b = cube.localToWorld(slot(cell).addScaledVector(axis, 0.5)).project(camera);
+    const rect = host.getBoundingClientRect();
+    return [((b.x - a.x) * rect.width) / 2, (-(b.y - a.y) * rect.height) / 2];
+  }
+
+  /**
+   * Work out the twist a swipe means: the face touched, the face axis the swipe runs
+   * along, and so the layer that turns and which way. Returns the rules' Twist plus how
+   * many pixels of swipe make a quarter turn along the swipe's screen direction.
+   */
+  function twistFromSwipe(cell: number, local: any, dx: number, dy: number): { t: Twist; dir: [number, number] } | null {
+    const rel = local.clone().sub(slot(cell));
+    const ax = [Math.abs(rel.x), Math.abs(rel.y), Math.abs(rel.z)];
+    const ni = ax.indexOf(Math.max(...ax));
+    const normal = new T.Vector3().setComponent(ni, Math.sign(rel.getComponent(ni)) || 1);
+    let best: { along: any; s: number; dot: number; dir: [number, number] } | null = null;
+    for (let i = 0; i < 3; i++) {
+      if (i === ni) continue;
+      const along = new T.Vector3().setComponent(i, 1);
+      const [sx, sy] = screenDir(cell, along);
+      const len = Math.hypot(sx, sy) || 1;
+      const dot = (sx * dx + sy * dy) / len;
+      if (!best || Math.abs(dot) > Math.abs(best.dot)) best = { along, s: Math.sign(dot) || 1, dot, dir: [sx / len, sy / len] };
+    }
+    if (!best) return null;
+    // Positive rotation about (normal x along) moves the touched face along +along.
+    const rot = new T.Vector3().crossVectors(normal, best.along);
+    let sigma = best.s;
+    const ri = [Math.abs(rot.x), Math.abs(rot.y), Math.abs(rot.z)].indexOf(1);
+    if (rot.getComponent(ri) < 0) sigma = -sigma;
+    const axis = ([0, 2, 1] as const)[ri] as Axis; // three x -> rules x, three y -> rules z (height), three z -> rules y
+    const slice = coord(cell)[axis] as Slice;
+    let t: Twist = { axis, slice, dir: 1 };
+    if (twistSign(t) !== sigma) t = { axis, slice, dir: -1 };
+    return { t, dir: [best.dir[0] * best.s, best.dir[1] * best.s] };
+  }
+
+  let grab: { cell: number; local: any; x0: number; y0: number; twist: { t: Twist; dir: [number, number] } | null; ctx: TwistCtx | null } | null = null;
+  const QUARTER_PX = 150;
+
   const onDown = (e: PointerEvent) => {
     sfx.unlock();
     dragging = true;
@@ -588,6 +707,11 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     lastX = e.clientX;
     lastY = e.clientY;
     host.setPointerCapture?.(e.pointerId);
+    grab = null;
+    if (board.twistEnabled && mode === 'rotating' && !preview) {
+      const p = pick(e.clientX, e.clientY);
+      if (p) grab = { ...p, x0: e.clientX, y0: e.clientY, twist: null, ctx: null };
+    }
   };
   const onMove = (e: PointerEvent) => {
     if (!dragging) return;
@@ -596,26 +720,54 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     lastX = e.clientX;
     lastY = e.clientY;
     moved += Math.abs(dx) + Math.abs(dy);
+    lastInput = now;
+    if (grab) {
+      const tx = e.clientX - grab.x0;
+      const ty = e.clientY - grab.y0;
+      if (!grab.twist && Math.hypot(tx, ty) > 14) {
+        const tw = twistFromSwipe(grab.cell, grab.local, tx, ty);
+        if (tw && board.onTwistIntent?.(tw.t) !== false) {
+          grab.twist = tw;
+          grab.ctx = beginTwist(tw.t);
+          sfx.whoosh();
+        } else {
+          grab = null;
+          return;
+        }
+      }
+      if (grab?.ctx && grab.twist) {
+        const along = tx * grab.twist.dir[0] + ty * grab.twist.dir[1];
+        turnTo(grab.ctx, Math.max(0, Math.min(1, along / QUARTER_PX)));
+      }
+      return;
+    }
     yaw += dx * 0.009;
     vyaw = dx * 0.009 * 60;
     if (mode === 'rotating') pitch = Math.max(-1.1, Math.min(1.1, pitch + dy * 0.007));
-    lastInput = now;
   };
   const onUp = (e: PointerEvent) => {
     if (!dragging) return;
     dragging = false;
+    if (grab?.ctx) {
+      const ctx = grab.ctx;
+      grab = null;
+      if (ctx.f > 0.28) {
+        preview = ctx;
+        const from = ctx.f;
+        void anim(0.15, (k) => turnTo(ctx, from + (1 - from) * ease.outCubic(k)));
+        board.onTwistReady?.(ctx.t);
+      } else {
+        const from = ctx.f;
+        void anim(0.15, (k) => turnTo(ctx, from * (1 - k))).then(() => abandonTwist(ctx));
+      }
+      return;
+    }
+    grab = null;
     if (moved > 8) return;
     vyaw = 0;
     lastInput = now;
-    const rect = host.getBoundingClientRect();
-    ray.setFromCamera(new T.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1), camera);
-    const targets = [...casings.filter((c) => c.visible), ...shells.filter(Boolean)];
-    const hitObj = ray.intersectObjects(targets, true)[0];
-    if (!hitObj) return;
-    let o = hitObj.object;
-    while (o && o.userData.cell === undefined && !shells.includes(o)) o = o.parent;
-    const cell = o?.userData.cell ?? shells.indexOf(o);
-    if (cell >= 0) board.onTap?.(cell);
+    const p = pick(e.clientX, e.clientY);
+    if (p && !preview) board.onTap?.(p.cell);
   };
   host.addEventListener('pointerdown', onDown);
   host.addEventListener('pointermove', onMove);
@@ -709,6 +861,26 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   const board: Board = {
     onTap: null,
+    onTwistIntent: null,
+    onTwistReady: null,
+    twistEnabled: false,
+    async cancelTwist() {
+      const ctx = preview;
+      if (!ctx) return;
+      preview = null;
+      const from = ctx.f;
+      await anim(0.2, (k) => turnTo(ctx, from * (1 - ease.outCubic(k))));
+      abandonTwist(ctx);
+    },
+    swipe(cell, dx, dy) {
+      const tw = twistFromSwipe(cell, slot(cell).multiplyScalar(1.5), dx, dy);
+      if (!tw || board.onTwistIntent?.(tw.t) === false) return null;
+      const ctx = beginTwist(tw.t);
+      turnTo(ctx, 1);
+      preview = ctx;
+      board.onTwistReady?.(tw.t);
+      return tw.t;
+    },
     attract: false,
     setMode,
     sync,
