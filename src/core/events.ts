@@ -4,10 +4,11 @@
 
 import type { Line, Player } from './geometry.ts';
 import type { Twist } from './twist.ts';
+import type { AbilityId, AgentId } from './agents.ts';
 
 export type GameEvent =
   /** A mark landed in a cell (a drop in stacking mode reports its landing cell). */
-  | { type: 'placed'; player: Player; cell: number; column?: number }
+  | { type: 'placed'; player: Player; cell: number; column?: number; wet?: boolean; chrome?: boolean }
   /** A player's oldest mark is now the next to fade (they have the maximum). */
   | { type: 'cracking'; player: Player; cell: number }
   /** A player's oldest mark faded away, before their new mark landed. */
@@ -26,7 +27,26 @@ export type GameEvent =
   | { type: 'roundOver'; winner: Player | null; line?: Line }
   /** Match level: a round result was counted. */
   | { type: 'roundWon'; winner: Player | null; round: number; wins: [number, number] }
-  | { type: 'matchWon'; winner: Player; wins: [number, number] };
+  | { type: 'matchWon'; winner: Player; wins: [number, number] }
+  // Agents mode.
+  /** A power or ultimate was used (shown before its effect). */
+  | { type: 'ability'; player: Player; agent: AgentId; id: AbilityId; cells: number[]; twists: Twist[] }
+  /** A mark was wiped off (Overspray). */
+  | { type: 'wiped'; player: Player; cell: number }
+  /** Marks slid to new cells (Shove, Swap; `flip` for Cascade's Flip). */
+  | { type: 'moved'; moves: { from: number; to: number; player: Player }[]; flip?: boolean }
+  /** A trap turned a fresh mark into the trapper's. */
+  | { type: 'converted'; cell: number; from: Player; to: Player }
+  /** A player's wet paint dried at the start of their turn. */
+  | { type: 'dried'; player: Player; cells: number[] }
+  /** A timed effect ran out. */
+  | { type: 'effectEnded'; kind: 'tape' | 'trap' | 'seal' | 'floor' | 'lockdown'; cell?: number; line?: number }
+  /** Reverb had nowhere to paint. */
+  | { type: 'fizzled'; id: AbilityId; player: Player }
+  /** Rewind: the board jumps back to these cells. */
+  | { type: 'rewound'; cells: (Player | null)[] }
+  /** No legal move (every open column taped): the turn passes. */
+  | { type: 'passed'; player: Player };
 
 /** Why a move was refused. */
 export type IllegalReason =
@@ -41,7 +61,19 @@ export type IllegalReason =
   | 'column-full'
   | 'wrong-mode'
   | 'match-over'
-  | 'not-your-turn';
+  | 'not-your-turn'
+  // Agents mode.
+  | 'taped'
+  | 'locked-down'
+  | 'sealed'
+  | 'not-your-power'
+  | 'power-used'
+  | 'ult-not-ready'
+  | 'cooldown'
+  | 'no-target'
+  | 'bad-target'
+  | 'must-move'
+  | 'no-agents';
 
 export class IllegalMove extends Error {
   readonly reason: IllegalReason;

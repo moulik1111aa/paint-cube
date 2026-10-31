@@ -15,7 +15,8 @@ export interface CascadeState {
   turn: Player;
   turns: number;
   scores: [number, number];
-  result: { winner: Player } | null;
+  /** `winner: null` is a draw (only Agents mode can draw a Cascade round). */
+  result: { winner: Player | null } | null;
 }
 
 export type CascadeMove = { kind: 'drop'; column: number };
