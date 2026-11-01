@@ -17,7 +17,7 @@ The design spec and build plan live in the 3 d Tic Tac Toe project on claude.ai.
 ## Install
 
 - **Android:** download [TicTacThree.apk](../../releases/latest/download/TicTacThree.apk) on your phone and open it. Updates install over the old version.
-- **Web:** the GitHub Pages site for this repository.
+- **Web:** https://tic-tac-three.web.app (Firebase Hosting), also the GitHub Pages site for this repository.
 
 ## Develop
 
