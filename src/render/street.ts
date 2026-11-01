@@ -1,5 +1,5 @@
 // Street-art set dressing, all drawn procedurally at startup: a graffiti-covered
-// concrete wall (with our own "PAINT CUBE" piece), a stained concrete ground, comic
+// concrete wall (with our own "TIC TAC THREE" piece), a stained concrete ground, comic
 // starburst captions, and spray-paint splat shapes. Nothing here copies a real artwork.
 
 import type { Three } from './three.ts';
@@ -151,7 +151,7 @@ function scribble(g: CanvasRenderingContext2D, x: number, y: number, w: number, 
   g.restore();
 }
 
-/** The alley wall: concrete, bricks showing through, graffiti and the Paint Cube piece. */
+/** The alley wall: concrete, bricks showing through, graffiti and the Tic Tac Three piece. */
 export function wallTexture(T: Three): any {
   const W = 1024;
   const H = 1536;
@@ -186,8 +186,21 @@ export function wallTexture(T: Three): any {
   for (let i = 0; i < 10; i++) star(g, r() * W, r() * H * 0.9, 14 + r() * 28, ['#f5e663', '#ff3d8b', '#38d6ff'][i % 3]);
   // The piece: centered above the cube.
   // The wall is 12 x 18 world units; the cube hides its middle, so the piece sits above.
-  bubbleText(g, 'PAINT', W / 2 - 6, H * 0.39, 112, '#ff7a1a', r, -0.08);
-  bubbleText(g, 'CUBE', W / 2 + 22, H * 0.47, 104, '#1aa0ff', r, -0.04);
+  bubbleText(g, 'TIC TAC', W / 2 - 6, H * 0.375, 92, '#ff7a1a', r, -0.08);
+  bubbleText(g, 'THREE', W / 2 + 22, H * 0.45, 100, '#1aa0ff', r, -0.04);
+  // The artist's tag under the piece.
+  g.save();
+  g.translate(W / 2 + 110, H * 0.505);
+  g.rotate(-0.07);
+  g.font = 'italic 900 40px "Inter Display", system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.lineWidth = 8;
+  g.strokeStyle = '#0d0a14';
+  g.strokeText('by Moulik', 0, 0);
+  g.fillStyle = '#f5e663';
+  g.fillText('by Moulik', 0, 0);
+  g.restore();
   // Side pieces for wide screens.
   bubbleText(g, '3x3', W * 0.1, H * 0.42, 110, '#f5e663', r, 0.06);
   bubbleText(g, 'WIN!', W * 0.9, H * 0.38, 110, '#ff3d8b', r, -0.1);

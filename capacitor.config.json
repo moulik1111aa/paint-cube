@@ -1,6 +1,6 @@
 {
   "appId": "com.paintcube.app",
-  "appName": "Paint Cube",
+  "appName": "Tic Tac Three",
   "webDir": "www",
   "backgroundColor": "#0B0B12",
   "loggingBehavior": "production",

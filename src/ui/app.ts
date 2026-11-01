@@ -7,7 +7,7 @@ import { loadThree } from '../render/three.ts';
 import { createBoard, type Board } from '../render/board.ts';
 import { fontsReady } from '../render/street.ts';
 import { Sfx } from '../audio/sfx.ts';
-import { Music, TRACKS } from '../audio/music.ts';
+import { Music, TRACKS, type TrackId } from '../audio/music.ts';
 import { coord, type Player } from '../core/geometry.ts';
 import { MAX_MARKS } from '../core/rotating.ts';
 import { landing } from '../core/cascade.ts';
@@ -50,7 +50,7 @@ declare global {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const COLORS = ['p1', 'p2'] as const;
-import { THEMES, playerCss, setTheme, theme } from '../theme.ts';
+import { THEMES, playerCss, setTheme, theme, type ThemeId } from '../theme.ts';
 let PLAYER_COLORS_CSS = playerCss();
 
 /** How to play, per mode (and for Agents): short cards, one idea each. */
@@ -128,9 +128,10 @@ export function startApp(app: HTMLElement): void {
   setTheme(prefs.theme);
   PLAYER_COLORS_CSS = playerCss();
   sfx.enabled = prefs.sound;
-  haptics.enabled = prefs.sound;
+  haptics.enabled = prefs.buzz;
   voice.enabled = prefs.voice;
   const music = new Music();
+  music.setLevel(prefs.musicVol);
   // Music starts on the first tap (browsers and WebViews need a gesture for sound).
   if (!manual) {
     const startMusic = () => {
@@ -167,7 +168,7 @@ export function startApp(app: HTMLElement): void {
   const meOf = () => (online ? online.me : null);
   const isMyTurn = () => (online ? (match ? match.round.turn === online.me : false) : !(pc && match && match.round.turn === 1));
 
-  ui.innerHTML = '<div class="screen loading"><h1 class="logo"><span class="p1">Paint</span><span class="p2">Cube</span></h1></div>';
+  ui.innerHTML = '<div class="screen loading"><h1 class="logo"><span class="p1">Tic Tac</span><span class="p2">Three</span><small class="by">by Moulik</small></h1></div>';
 
   let toastTimer = 0;
   const toast = (msg: string) => {
@@ -275,7 +276,7 @@ export function startApp(app: HTMLElement): void {
     startDemo();
     show(
       'nickname',
-      `<h1 class="sr-only">Paint Cube</h1><form class="card"><label for="nick">What do we call you?</label>` +
+      `<h1 class="sr-only">Tic Tac Three by Moulik</h1><form class="card"><label for="nick">What do we call you?</label>` +
         `<input id="nick" name="nick" maxlength="14" autocomplete="nickname" placeholder="Your tag" value="${esc(prefs.nickname)}" required>` +
         '<button class="btn big" type="submit">Let\'s go</button></form>',
     );
@@ -299,7 +300,7 @@ export function startApp(app: HTMLElement): void {
     if (screen !== 'nickname') startDemo();
     show(
       'home',
-      `<h1 class="sr-only">Paint Cube</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
+      `<h1 class="sr-only">Tic Tac Three by Moulik</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
         '<div class="stack">' +
         (saved ? `<button class="btn big resume" data-go="resume">Resume · ${esc(saved.names[0])} vs ${esc(saved.names[1])}${saved.pc ? ` (${saved.pc})` : ''} · R${saved.match.roundNumber}</button>` : '') +
         '<button class="btn big" data-go="pc">Play vs PC</button>' +
@@ -309,10 +310,7 @@ export function startApp(app: HTMLElement): void {
           ? '<button class="btn big alt" data-go="online">Play online</button></div>'
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
-        `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button>` +
-        `<button class="link" data-go="voice">Voice: ${prefs.voice ? 'on' : 'off'}</button>` +
-        `<button class="link" data-go="music">Music: ${TRACKS.find((x) => x.id === prefs.music)?.name ?? 'Off'}</button>` +
-        `<button class="link" data-go="theme">Look: ${THEMES.find((x) => x.id === prefs.theme)?.name}</button></div>` +
+        '<button class="link" data-go="settings">⚙ Settings</button></div>' +
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
     void leaveOnline();
@@ -333,32 +331,81 @@ export function startApp(app: HTMLElement): void {
       toast(s ? `3D: ${s.ratio.toFixed(2)}x sharpness · ${s.fps || '…'} fps · quality ${s.levels - s.level}/${s.levels}` : '3D is still loading');
     });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
-    ui.querySelector('[data-go="theme"]')!.addEventListener('click', () => {
-      const i = THEMES.findIndex((x) => x.id === prefs.theme);
-      prefs = { ...prefs, theme: THEMES[(i + 1) % THEMES.length].id };
-      savePrefs(prefs);
-      // The 3D scene is built in its look: start again in the new one.
-      location.reload();
-    });
-    ui.querySelector('[data-go="music"]')!.addEventListener('click', () => {
-      const i = TRACKS.findIndex((x) => x.id === prefs.music);
-      const next = TRACKS[(i + 1) % TRACKS.length].id;
-      prefs = { ...prefs, music: next };
-      savePrefs(prefs);
-      if (!manual) music.set(next);
-      homeScreen();
-    });
-    ui.querySelector('[data-go="voice"]')!.addEventListener('click', () => {
-      setVoice(!prefs.voice);
-      homeScreen();
-    });
-    ui.querySelector('[data-go="sound"]')!.addEventListener('click', () => {
-      prefs = { ...prefs, sound: !prefs.sound };
-      sfx.enabled = prefs.sound;
-      haptics.enabled = prefs.sound;
-      savePrefs(prefs);
-      homeScreen();
-    });
+    ui.querySelector('[data-go="settings"]')!.addEventListener('click', settingsSheet);
+  }
+
+  // ---- settings: sound, vibration, music, voice and the look, in one sheet ----
+  function settingsSheet(): void {
+    ui.querySelector('.settings')?.remove();
+    const sheet = document.createElement('div');
+    sheet.className = 'review settings';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', 'Settings');
+    const onOff = (key: string, label: string, on: boolean) =>
+      `<li class="srow"><b>${label}</b><button class="sw ${on ? 'on' : ''}" data-set="${key}" role="switch" aria-checked="${on}" aria-label="${label}"><span class="knob"></span></button></li>`;
+    const pick = (key: string, label: string, opts: { id: string | number; name: string }[], cur: string | number) =>
+      `<li class="srow col"><b>${label}</b><div class="opts" role="radiogroup" aria-label="${label}">${opts
+        .map((o) => `<button class="opt ${o.id === cur ? 'on' : ''}" data-${key}="${o.id}" role="radio" aria-checked="${o.id === cur}">${o.name}</button>`)
+        .join('')}</div></li>`;
+    const draw = () => {
+      sheet.innerHTML =
+        '<div class="sheet"><div class="top"><p class="kicker">Settings</p><button class="x" data-close aria-label="Close">✕</button></div><ul class="rlist">' +
+        pick('look', 'Look', THEMES.map((t) => ({ id: t.id, name: t.id === 'notebook' ? '✒️ Pen & paper' : '🎨 Street' })), prefs.theme) +
+        pick('track', 'Music', TRACKS, prefs.music) +
+        (prefs.music === 'off' ? '' : pick('vol', 'Music volume', [{ id: 1, name: 'Soft' }, { id: 2, name: 'Normal' }, { id: 3, name: 'Loud' }], prefs.musicVol)) +
+        onOff('sound', 'Sound effects', prefs.sound) +
+        onOff('buzz', 'Vibration', prefs.buzz) +
+        onOff('voice', 'Read tutorials aloud', prefs.voice) +
+        '</ul></div>';
+      sheet.querySelector('[data-close]')!.addEventListener('click', () => sheet.remove());
+      sheet.addEventListener('click', (e) => e.target === sheet && sheet.remove());
+      sheet.querySelectorAll<HTMLElement>('[data-look]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const t = b.dataset.look as ThemeId;
+          if (t === prefs.theme) return;
+          prefs = { ...prefs, theme: t, themePicked: true };
+          savePrefs(prefs);
+          // The 3D scene is built in its look: start again in the new one.
+          location.reload();
+        }),
+      );
+      sheet.querySelectorAll<HTMLElement>('[data-track]').forEach((b) =>
+        b.addEventListener('click', () => {
+          prefs = { ...prefs, music: b.dataset.track as TrackId };
+          savePrefs(prefs);
+          if (!manual) music.set(prefs.music);
+          draw();
+        }),
+      );
+      sheet.querySelectorAll<HTMLElement>('[data-vol]').forEach((b) =>
+        b.addEventListener('click', () => {
+          prefs = { ...prefs, musicVol: Number(b.dataset.vol) as 1 | 2 | 3 };
+          savePrefs(prefs);
+          music.setLevel(prefs.musicVol);
+          draw();
+        }),
+      );
+      sheet.querySelectorAll<HTMLElement>('[data-set]').forEach((b) =>
+        b.addEventListener('click', () => {
+          const k = b.dataset.set;
+          if (k === 'sound') {
+            prefs = { ...prefs, sound: !prefs.sound };
+            sfx.enabled = prefs.sound;
+          } else if (k === 'buzz') {
+            prefs = { ...prefs, buzz: !prefs.buzz };
+            haptics.enabled = prefs.buzz;
+            if (prefs.buzz) haptics.tap();
+          } else if (k === 'voice') {
+            setVoice(!prefs.voice);
+            return draw();
+          }
+          savePrefs(prefs);
+          draw();
+        }),
+      );
+    };
+    draw();
+    ui.appendChild(sheet);
   }
 
   function localSetup(vsPc: boolean): void {
@@ -1508,7 +1555,7 @@ export function startApp(app: HTMLElement): void {
     );
     ui.querySelector('.back')!.addEventListener('click', homeScreen);
     ui.querySelector('[data-go="share"]')!.addEventListener('click', async () => {
-      const text = `Join my Paint Cube room: ${code}`;
+      const text = `Join my Tic Tac Three room: ${code}`;
       try {
         if (navigator.share) await navigator.share({ text });
         else {

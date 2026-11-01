@@ -1,6 +1,7 @@
-# Builds the signed Paint Cube APK on every push to main and publishes it as a GitHub
+# Builds the signed Tic Tac Three APK on every push to main and publishes it as a GitHub
 # Release. Adapted from Study Hard's workflow. The newest APK is always at:
-#   https://github.com/<owner>/<repo>/releases/latest/download/PaintCube.apk
+#   https://github.com/<owner>/<repo>/releases/latest/download/TicTacThree.apk
+#   (also attached as PaintCube.apk, the name before build 22, so old links keep working)
 #
 # Signing: native/android/paintcube-release.jks.gpg is the release keystore, encrypted
 # with the PAINTCUBE_SIGNING_PASSWORD repository secret (also the keystore password),
@@ -143,10 +144,11 @@ jobs:
           CODE=$GITHUB_RUN_NUMBER   # same version code as scripts/android.mjs
           TAG="v$V-build.$CODE"
           {
-            echo "**Paint Cube $V, build $CODE**"
+            echo "**Tic Tac Three by Moulik $V, build $CODE**"
             echo
             echo "$(git log -1 --pretty=%s)"
             echo
-            echo "Install: download **PaintCube.apk** below on your phone and open it. Updates install over the old version."
+            echo "Install: download **TicTacThree.apk** below on your phone and open it. Updates install over the old version."
           } > notes.md
-          gh release create "$TAG" PaintCube.apk --title "Paint Cube $V (build $CODE)" --notes-file notes.md --latest
+          cp PaintCube.apk TicTacThree.apk
+          gh release create "$TAG" TicTacThree.apk PaintCube.apk --title "Tic Tac Three $V (build $CODE)" --notes-file notes.md --latest

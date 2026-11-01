@@ -1,4 +1,4 @@
-# Paint Cube
+# Tic Tac Three by Moulik
 
 3x3x3 tic-tac-toe for two players, with two modes, paint-splash effects and online rooms.
 
@@ -12,11 +12,11 @@
   Powers run on cooldowns; paint they put down is *wet* and only counts once it dries, so a power never wins a round on its own. Every number lives in `AGENT_TUNING` (`src/core/agents.ts`); the balance runs and tuning log are in [docs/agents-balance.md](docs/agents-balance.md).
 - Best of 3, pass-and-play on one phone, or online by room code (Classic only).
 
-The design spec and build plan live in the Paint Cube project on claude.ai.
+The design spec and build plan live in the 3 d Tic Tac Toe project on claude.ai.
 
 ## Install
 
-- **Android:** download [PaintCube.apk](../../releases/latest/download/PaintCube.apk) on your phone and open it. Updates install over the old version.
+- **Android:** download [TicTacThree.apk](../../releases/latest/download/TicTacThree.apk) on your phone and open it. Updates install over the old version.
 - **Web:** the GitHub Pages site for this repository.
 
 ## Develop
@@ -34,7 +34,7 @@ npm run simulate -- agents   # the full Agents balance sweep (both modes, ~4 min
 
 Every push to `main` runs two workflows:
 
-- **Build APK** builds, signs and verifies `PaintCube.apk`, then publishes it as the latest GitHub Release.
+- **Build APK** builds, signs and verifies the APK (`TicTacThree.apk`), then publishes it as the latest GitHub Release.
 - **Website** deploys `dist/index.html` to GitHub Pages.
 
 One-time setup:

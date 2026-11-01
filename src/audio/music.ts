@@ -94,8 +94,9 @@ export class Music {
   private next = 0;
   private bar = 0;
   private step = 0;
-  /** Overall loudness (kept low: it sits under the game). */
-  volume = 0.5;
+  /** Overall loudness: 1 soft, 2 normal, 3 loud (it still sits under the sound effects). */
+  private level: 1 | 2 | 3 = 2;
+  private gainFor = () => [0, 0.24, 0.42, 0.62][this.level];
 
   constructor() {
     document.addEventListener('visibilitychange', () => {
@@ -118,12 +119,22 @@ export class Music {
     const now = this.ctx!.currentTime;
     this.out!.gain.cancelScheduledValues(now);
     this.out!.gain.setValueAtTime(0.0001, now);
-    this.out!.gain.exponentialRampToValueAtTime(this.volume * 0.35, now + 1.5);
+    this.out!.gain.exponentialRampToValueAtTime(this.gainFor(), now + 1.5);
     this.bar = 0;
     this.step = 0;
     this.next = now + 0.1;
     clearInterval(this.timer);
     this.timer = window.setInterval(() => this.schedule(), 90);
+  }
+
+  /** Change the loudness (1–3) without restarting the track. */
+  setLevel(level: 1 | 2 | 3): void {
+    this.level = level;
+    if (!this.ctx || !this.out || this.track === 'off') return;
+    const now = this.ctx.currentTime;
+    this.out.gain.cancelScheduledValues(now);
+    this.out.gain.setValueAtTime(Math.max(0.0001, this.out.gain.value), now);
+    this.out.gain.linearRampToValueAtTime(this.gainFor(), now + 0.3);
   }
 
   private stop(): void {
@@ -147,7 +158,14 @@ export class Music {
       const lp = this.ctx.createBiquadFilter();
       lp.type = 'lowpass';
       lp.frequency.value = 5200;
-      this.out.connect(lp).connect(this.ctx.destination);
+      // A soft limiter keeps the louder settings from clipping when notes pile up.
+      const comp = this.ctx.createDynamicsCompressor();
+      comp.threshold.value = -14;
+      comp.knee.value = 12;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.01;
+      comp.release.value = 0.25;
+      this.out.connect(lp).connect(comp).connect(this.ctx.destination);
       const n = this.ctx.sampleRate;
       this.noiseBuf = this.ctx.createBuffer(1, n, n);
       const d = this.noiseBuf.getChannelData(0);

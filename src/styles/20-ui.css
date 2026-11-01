@@ -28,6 +28,7 @@
 .logo span { display: block; -webkit-text-stroke: 7px #0d0a14; paint-order: stroke fill; }
 .logo .p1 { color: var(--p1); }
 .logo .p2 { color: var(--p2); margin-left: 34px; }
+.logo .by { display: block; margin-top: 10px; font-size: 16px; letter-spacing: 0.12em; color: var(--ink); text-transform: none; font-style: italic; }
 .screen.loading { justify-content: center; }
 .screen.home, .screen.nickname { justify-content: flex-end; gap: 18px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

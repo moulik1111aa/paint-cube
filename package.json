@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Paint Cube — 3x3x3 tic-tac-toe with a rotating cube, stacking cascades, paint-splash effects and online rooms",
+  "description": "Tic Tac Three by Moulik — 3x3x3 tic-tac-toe with a rotating cube, stacking cascades, paint-splash effects and online rooms",
   "scripts": {
     "setup:local": "sh scripts/link-tools.sh",
     "typecheck": "tsc --noEmit -p .",

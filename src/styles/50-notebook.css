@@ -92,3 +92,12 @@
 [data-theme='notebook'] .pw { background: #fff; color: var(--ink); border-color: var(--line); }
 [data-theme='notebook'] .preview p { color: var(--ink); }
 [data-theme='notebook'] .lesson .whoacts { color: #fff; border-color: var(--line); }
+[data-theme='notebook'] .settings .rlist li { border-color: var(--line); background: #fff; }
+[data-theme='notebook'] .settings .opt { border-color: var(--line); background: #fff; color: var(--ink); box-shadow: 1px 2px 0 rgba(28, 47, 134, 0.85); }
+[data-theme='notebook'] .settings .opt.on { background: var(--p1); color: #fff; }
+[data-theme='notebook'] .settings .sw { border-color: var(--line); background: #d9d6ce; }
+[data-theme='notebook'] .settings .sw .knob { border-color: var(--line); background: #fff; }
+[data-theme='notebook'] .settings .sw.on { background: var(--p1); }
+[data-theme='notebook'] .review .kicker { color: var(--p2); }
+[data-theme='notebook'] .review .x { background: var(--line); color: #fff; }
+[data-theme='notebook'] .logo .by { color: var(--ink); }

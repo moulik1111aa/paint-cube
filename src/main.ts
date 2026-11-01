@@ -1,4 +1,4 @@
-// Paint Cube entry point.
+// Tic Tac Three entry point.
 
 import { startApp } from './ui/app.ts';
 

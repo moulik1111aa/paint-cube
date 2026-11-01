@@ -348,12 +348,12 @@ test('vs PC: the PC answers every move, in Classic and with agents, and the matc
   expect(errors).toEqual([]);
 });
 
-test('trial: try a writer against an easy PC with every power ready each turn; wet rows say when they count', async ({ page }) => {
+test('trial: try a writer against an easy PC with every power ready each turn; wet rows say when they count (Pro)', async ({ page }) => {
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'] })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, pro: true, seenHelp: ['rotating', 'cascade', 'agents'] })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);

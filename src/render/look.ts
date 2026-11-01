@@ -1,4 +1,4 @@
-// The Paint Cube look: geometry, materials and procedural textures shared by every
+// The Tic Tac Three look: geometry, materials and procedural textures shared by every
 // scene. Cells are rounded, glossy dark casings; paint is cel-shaded (three tones)
 // with an ink outline; the Core is an emissive gem bright enough to bloom.
 // Everything is generated at startup: no image files to license or load.

@@ -1,5 +1,5 @@
 // Small preferences kept on the device: the nickname, the last Player 2 name, the
-// last mode, and sound. Storage can be unavailable (private windows), so every access
+// last mode, sound, music and the look. Storage can be unavailable (private windows), so every access
 // is guarded and the app works without it.
 
 import type { MatchState, Mode } from '../core/match.ts';
@@ -30,12 +30,19 @@ export interface Prefs {
   pro: boolean;
   /** Background music track. */
   music: TrackId;
-  /** Look: Street or Notebook. */
+  /** Look: Notebook (pen on paper, the default) or Street. */
   theme: ThemeId;
+  /** Vibration on taps and wins (separate from sound effects). */
+  buzz: boolean;
+  /** Music loudness: 1 soft, 2 normal, 3 loud. */
+  musicVol: 1 | 2 | 3;
+  /** The look was chosen in Settings (before build 22 Street was the default, so an
+   *  old saved 'street' without this switches to Notebook once). */
+  themePicked: boolean;
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'street' };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'notebook', buzz: true, musicVol: 2, themePicked: false };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -54,7 +61,10 @@ export function loadPrefs(): Prefs {
       pcLevel: isLevel(p.pcLevel) ? p.pcLevel : 'normal',
       pro: p.pro === true,
       music: (['off', 'lofi', 'zen', 'street', 'night'] as const).includes(p.music as never) ? (p.music as TrackId) : 'lofi',
-      theme: p.theme === 'notebook' ? 'notebook' : 'street',
+      theme: p.theme === 'street' && p.themePicked === true ? 'street' : 'notebook',
+      themePicked: p.themePicked === true,
+      buzz: typeof p.buzz === 'boolean' ? p.buzz : p.sound !== false,
+      musicVol: p.musicVol === 1 || p.musicVol === 3 ? p.musicVol : 2,
       picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],
     };
   } catch {

@@ -120,10 +120,11 @@ export function pageTexture(T: Three): any {
     g.stroke();
   }
   // The title, hand-lettered in outline with hatching, like a doodle in a margin.
-  g.font = '900 150px "Inter Display", system-ui, sans-serif';
+  g.font = '900 136px "Inter Display", system-ui, sans-serif';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  for (const [word, y, rot] of [['PAINT', H * 0.36, -0.05], ['CUBE', H * 0.45, 0.03]] as const) {
+  for (const [word, y, rot, size] of [['TIC TAC', H * 0.335, -0.05, 112], ['THREE', H * 0.415, 0.03, 136]] as const) {
+    g.font = `900 ${size}px "Inter Display", system-ui, sans-serif`;
     g.save();
     g.translate(W / 2 + 10, y);
     g.rotate(rot);
@@ -150,6 +151,19 @@ export function pageTexture(T: Three): any {
     g.globalAlpha = 1;
     g.restore();
   }
+  // The byline, signed in pen under the title with a quick underline.
+  g.save();
+  g.translate(W / 2 + 120, H * 0.47);
+  g.rotate(-0.06);
+  g.font = 'italic 700 54px "Inter Display", system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = INK_BLUE;
+  g.globalAlpha = 0.9;
+  g.fillText('by Moulik', 0, 0);
+  g.globalAlpha = 1;
+  g.restore();
+  pen(g, [[W / 2 + 10, H * 0.47 + 40], [W / 2 + 120, H * 0.47 + 30], [W / 2 + 236, H * 0.47 + 22]], r, INK_BLUE, 3);
   // Doodles: stars, a spiral, a little cube, arrows, "3x3".
   const star = (x: number, y: number, s: number) => {
     const pts: [number, number][] = [];

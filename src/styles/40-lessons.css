@@ -173,3 +173,15 @@
 .review .wetbox b { font-weight: 900; font-size: 14px; }
 .review .wetbox p { margin: 4px 0 0; font-weight: 700; font-size: 13px; line-height: 1.35; }
 .setup .note, .screen .note { margin: 0 0 12px; max-width: 380px; font-weight: 700; font-size: 15px; line-height: 1.4; text-align: center; text-shadow: 0 1px 3px #000; }
+
+/* Settings sheet (home ⚙): look, music, sound, vibration, voice. */
+.settings .rlist li.srow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settings .rlist li.srow.col { flex-direction: column; align-items: stretch; }
+.settings .srow b { font-weight: 900; font-size: 15px; }
+.settings .opts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.settings .opt { appearance: none; font: 800 13px/1 'Inter Display', system-ui, sans-serif; padding: 9px 11px; border: 2px solid #000; border-radius: 999px; background: #f4f1ea; color: #0b0b12; box-shadow: 0 2px 0 #000; }
+.settings .opt.on { background: #ff3d8b; color: #fff; }
+.settings .sw { appearance: none; flex: none; position: relative; width: 54px; height: 30px; padding: 0; border-radius: 999px; border: 3px solid #000; background: #4a4458; }
+.settings .sw .knob { position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #f4f1ea; border: 2px solid #000; transition: transform 0.15s; }
+.settings .sw.on { background: #2ee6c9; }
+.settings .sw.on .knob { transform: translateX(24px); }
