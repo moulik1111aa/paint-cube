@@ -1,0 +1,27 @@
+# Plays a real online room between two headless phones against the live Firebase
+# project (the cloud sandbox used for development can't reach Firebase; CI can).
+name: Online check
+
+on:
+  push:
+    branches: [wip]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install and build
+        run: |
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npm run build
+      - name: Two phones, one room
+        run: npx playwright test -c e2e-live

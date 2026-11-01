@@ -27,9 +27,9 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await expect(page.locator('.game')).toHaveAttribute('data-three-d', 'ok');
 
   // Nickname, then home.
-  await page.fill('#nick', '  Akshat  ');
+  await page.fill('#nick', '  Moulik  ');
   await page.click('form .btn');
-  await expect(page.locator('.hello')).toContainText('Akshat');
+  await expect(page.locator('.hello')).toContainText('Moulik');
 
   // Local setup: Twist, Player 2 named.
   await page.click('[data-go="local"]');
@@ -42,7 +42,7 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await expect(page.locator('.help h2')).toHaveText('Only 3 marks');
   await page.click('.help [data-skip]');
   await expect(page.locator('.help')).toHaveCount(0);
-  await expect(page.locator('.tagbox.p1 b')).toHaveText('Akshat');
+  await expect(page.locator('.tagbox.p1 b')).toHaveText('Moulik');
   await expect(page.locator('.tagbox.p2 b')).toHaveText('Riya');
   await expect(page.locator('.tagbox.p1')).toHaveClass(/active/);
 
@@ -50,9 +50,9 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await tap(page, 13);
   await expect(page.locator('.toast')).toContainText('Core');
 
-  // Round 1 (Akshat starts): Akshat paints 0, 1, 2.
+  // Round 1 (Moulik starts): Moulik paints 0, 1, 2.
   for (const c of [0, 9, 1, 10, 2]) await tap(page, c);
-  await expect(page.locator('.result h2')).toContainText('Akshat takes round 1');
+  await expect(page.locator('.result h2')).toContainText('Moulik takes round 1');
   await page.click('[data-go="next"]');
   await expect(page.locator('.tagbox.p2')).toHaveClass(/active/);
 
@@ -61,12 +61,12 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await expect(page.locator('.result h2')).toContainText('Riya takes round 2');
   await page.click('[data-go="next"]');
 
-  // Round 3: Akshat wins the match 2-1.
+  // Round 3: Moulik wins the match 2-1.
   for (const c of [0, 9, 1, 10, 2]) await tap(page, c);
-  await expect(page.locator('.result h2')).toContainText('Akshat wins the match');
+  await expect(page.locator('.result h2')).toContainText('Moulik wins the match');
   await expect(page.locator('.result .score')).toHaveText('2 – 1');
 
-  // Home, then a Cascade match: Akshat completes the bottom row and scores.
+  // Home, then a Cascade match: Moulik completes the bottom row and scores.
   await page.click('[data-go="home"]');
   await page.click('[data-go="local"]');
   await page.click('[data-mode="cascade"]');
@@ -78,8 +78,8 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
 
   // Back leaves the match, which is saved: Resume brings it back as it was.
   await page.goBack();
-  await expect(page.locator('.hello')).toContainText('Akshat');
-  await expect(page.locator('[data-go="resume"]')).toContainText('Akshat vs Riya · R1');
+  await expect(page.locator('.hello')).toContainText('Moulik');
+  await expect(page.locator('[data-go="resume"]')).toContainText('Moulik vs Riya · R1');
   await page.click('[data-go="resume"]');
   await expect(page.locator('.tagbox.p1 .score')).toHaveText('1 pts');
   await page.click('.back');
@@ -92,7 +92,7 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   // Reload (the app was closed): the nickname and the match in progress are remembered.
   await page.reload();
   await page.waitForFunction(() => window.__game?.ready);
-  await expect(page.locator('.hello')).toContainText('Akshat');
+  await expect(page.locator('.hello')).toContainText('Moulik');
   await expect(page.locator('[data-go="resume"]')).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -101,13 +101,13 @@ test('twisting: swipe, confirm, refused when you twisted last turn, cancel chang
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="local"]');
   await page.click('[data-go="start"]');
 
-  await tap(page, 0); // Akshat paints a corner
+  await tap(page, 0); // Moulik paints a corner
 
   // Riya swipes across the top of a corner cell: a preview holds, then she confirms.
   expect(await page.evaluate(() => window.__game!.swipe(18, 140, 0))).toBe(true);
@@ -119,14 +119,14 @@ test('twisting: swipe, confirm, refused when you twisted last turn, cancel chang
   expect((after as { lastTwist: unknown }).lastTwist).not.toBeNull();
   expect((after as { twistedLast: boolean[] }).twistedLast[1]).toBe(true);
 
-  // Akshat paints; Riya cannot twist again straight away.
+  // Moulik paints; Riya cannot twist again straight away.
   const empty = await page.evaluate(() => window.__game!.state()!.round.cells.findIndex((c, i) => c === null && i !== 13));
   await tap(page, empty);
   expect(await page.evaluate(() => window.__game!.swipe(18, 140, 0))).toBe(false);
   await expect(page.locator('.toast')).toContainText('twisted last turn');
   await expect(page.locator('.confirm')).toHaveCount(0);
 
-  // Riya paints instead; Akshat starts a twist and cancels: nothing changes.
+  // Riya paints instead; Moulik starts a twist and cancels: nothing changes.
   const empty2 = await page.evaluate(() => window.__game!.state()!.round.cells.findIndex((c, i) => c === null && i !== 13));
   await tap(page, empty2);
   const before = await page.evaluate(() => JSON.stringify(window.__game!.state()));
@@ -141,7 +141,7 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Akshat', player2: '', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: '', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual&memrelay');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="online"]');
@@ -173,7 +173,7 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   await tap(page, 1);
   await guest(10);
   await tap(page, 2);
-  await expect(page.locator('.result h2')).toContainText('Akshat takes round 1');
+  await expect(page.locator('.result h2')).toContainText('Moulik takes round 1');
   await page.click('[data-go="next"]');
   await settle(page);
   await expect(page.locator('.turn')).toContainText("Riya's turn");
