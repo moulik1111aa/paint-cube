@@ -1,7 +1,8 @@
 # Deploys the web version to Firebase Hosting (https://tic-tac-three.web.app) on every
 # push to main, alongside GitHub Pages. Needs one repository secret,
 # FIREBASE_SERVICE_ACCOUNT: the JSON key of a service account with the
-# "Firebase Hosting Admin" and "API Keys Viewer" roles on project tic-tac-three.
+# "Firebase Hosting Admin" role on project tic-tac-three (scripts/firebase-deploy.mjs
+# talks to the Hosting API directly).
 # Until that secret exists this workflow only builds and skips the deploy.
 name: Firebase site
 
@@ -50,9 +51,6 @@ jobs:
 
       - name: Deploy to Firebase Hosting
         if: steps.key.outputs.ok == 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: tic-tac-three
-          channelId: live
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node scripts/firebase-deploy.mjs tic-tac-three
