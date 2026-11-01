@@ -325,7 +325,10 @@ test('vs PC: the PC answers every move, in Classic and with agents, and the matc
   await page.click('.back');
   await expect(page.locator('[data-go="resume"]')).toContainText('vs PC (easy)');
   await page.click('[data-go="resume"]');
-  await tap(page, 2);
+  await page.waitForFunction(() => !window.__game!.busy());
+  // An empty cell (the easy PC plays loosely, so it may have taken any of them).
+  const free = await page.evaluate(() => [2, 6, 8, 18, 20, 24, 26].find((c) => window.__game!.state()!.round.cells[c] === null)!);
+  await tap(page, free);
   await settle(page);
   expect(await painted()).toBe(4);
 
