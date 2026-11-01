@@ -13,6 +13,12 @@
 //
 // Every tunable number lives in AGENT_TUNING, so tuning is a data change and the
 // tests and simulations read the same table.
+//
+// Two rule sets. SIMPLE (the default) has no wet paint and one plain rule instead: on a
+// turn you use a power, you can't finish a line of your own. Powers are once per round,
+// every ultimate charges in the same number of turns, and Stencil and Echo swap their
+// trickiest powers for Shield, Relocate and Freeze. PRO is the original set, with wet
+// paint, cooldowns and per-ultimate costs (AGENT_TUNING).
 
 import { CELLS, CENTER, COLUMNS, LINES, coord, index, other, type Cell, type Line, type Player } from './geometry.ts';
 import { IllegalMove, type GameEvent, type IllegalReason } from './events.ts';
@@ -22,7 +28,7 @@ import { TWISTS, inverse, permutation, sameTwist, type Twist } from './twist.ts'
 
 export type AgentId = 'blitz' | 'stencil' | 'drift' | 'echo';
 export const AGENT_IDS: readonly AgentId[] = ['blitz', 'stencil', 'drift', 'echo'];
-export type PowerId = 'doubleTap' | 'shove' | 'overspray' | 'tape' | 'fixative' | 'wetFloor' | 'spin' | 'swap' | 'trap' | 'afterimage' | 'delay' | 'reverb';
+export type PowerId = 'doubleTap' | 'shove' | 'overspray' | 'tape' | 'fixative' | 'wetFloor' | 'spin' | 'swap' | 'trap' | 'afterimage' | 'delay' | 'reverb' | 'shield' | 'relocate' | 'freeze';
 export type UltId = 'chrome' | 'lockdown' | 'flip' | 'rewind';
 export type AbilityId = PowerId | UltId;
 type AgentMode = 'rotating' | 'cascade';
@@ -41,6 +47,15 @@ export const AGENTS: Record<AgentId, AgentInfo> = {
   drift: { name: 'DRIFT', role: 'Controller', tagline: 'Moves the whole wall', powers: ['spin', 'swap', 'trap'], ult: 'flip' },
   echo: { name: 'ECHO', role: 'Initiator', tagline: 'Plays with time', powers: ['afterimage', 'delay', 'reverb'], ult: 'rewind' },
 };
+
+/** Simple rules: the same writers with their easiest powers. */
+export const SIMPLE_POWERS: Record<AgentId, readonly [PowerId, PowerId, PowerId]> = {
+  blitz: ['doubleTap', 'shove', 'overspray'],
+  stencil: ['tape', 'shield', 'relocate'],
+  drift: ['spin', 'swap', 'trap'],
+  echo: ['afterimage', 'freeze', 'reverb'],
+};
+export const powersOf = (agent: AgentId, simple = false): readonly PowerId[] => (simple ? SIMPLE_POWERS[agent] : AGENTS[agent].powers);
 
 export interface ModeTuning {
   /** Your turns a power stays unavailable after use. */
@@ -72,6 +87,7 @@ export interface ModeTuning {
 const base = (cd: number): Record<PowerId, number> => ({
   doubleTap: cd, shove: cd, overspray: cd, tape: cd, fixative: cd, wetFloor: cd,
   spin: cd, swap: cd, trap: cd, afterimage: cd, delay: cd, reverb: cd,
+  shield: cd, relocate: cd, freeze: cd,
 });
 
 /**
@@ -90,6 +106,7 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
       tape: 2, fixative: 1, wetFloor: 3,
       spin: 8, swap: 8, trap: 9,
       afterimage: 6, delay: 4, reverb: 5,
+      shield: 1, relocate: 8, freeze: 4,
     },
     firstReady: { ...base(0), doubleTap: 1, shove: 1, overspray: 1, spin: 3, swap: 5 },
     ultCost: { chrome: 10, lockdown: 6, flip: 12, rewind: 10 },
@@ -112,6 +129,7 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
       tape: 4, fixative: 4, wetFloor: 4,
       spin: 12, swap: 3, trap: 1,
       afterimage: 12, delay: 12, reverb: 12,
+      shield: 4, relocate: 12, freeze: 12,
     },
     firstReady: { ...base(0), doubleTap: 14, overspray: 12, shove: 10, spin: 6, afterimage: 11, delay: 11, reverb: 11 },
     ultCost: { chrome: 50, lockdown: 9, flip: 7, rewind: 30 },
@@ -129,10 +147,56 @@ export const AGENT_TUNING: Record<AgentMode, ModeTuning> = {
   },
 };
 
+/** Once per round: a used power stays out for the rest of the round (reset each round). */
+export const ONCE = 99;
+
+/**
+ * Simple rules' numbers. No wet paint (dryTurns 0); every power once per round. In Twist
+ * every power is ready from the first turn and every ultimate after 6 of your turns; in
+ * Cascade some powers wake up later and the ultimates differ (balanced with the sweep).
+ */
+export const SIMPLE_TUNING: Record<AgentMode, ModeTuning> = {
+  rotating: {
+    cooldown: base(ONCE),
+    firstReady: base(0),
+    ultCost: { chrome: 6, lockdown: 6, flip: 6, rewind: 6 },
+    ultPerTurn: 1,
+    ultBonus: 0,
+    dryTurns: 0,
+    tapeTurns: 2,
+    fixativeTurns: 2,
+    wetFloorTurns: 2,
+    trapTurns: 5,
+    lockdownTurns: 1,
+    chromeMarks: 2,
+    chromeScore: 2,
+    drawTurns: 50,
+  },
+  cascade: {
+    cooldown: base(ONCE),
+    // Cascade is a race to 5: Blitz's and Echo's extra cubes and wipes decided it from
+    // turn one, so in Cascade they wake up later in the round (the sweep's numbers).
+    firstReady: { ...base(0), doubleTap: 15, overspray: 16, shove: 13, afterimage: 14, reverb: 14, spin: 4 },
+    ultCost: { chrome: 26, lockdown: 8, flip: 8, rewind: 24 },
+    ultPerTurn: 1,
+    ultBonus: 0,
+    dryTurns: 0,
+    tapeTurns: 3,
+    fixativeTurns: 3,
+    wetFloorTurns: 2,
+    trapTurns: 4,
+    lockdownTurns: 2,
+    chromeMarks: 1,
+    chromeScore: 2,
+    drawTurns: 120,
+  },
+};
+
 export type Effect =
   | { kind: 'tape' | 'trap' | 'seal'; cell: number; by: Player; turns: number }
   | { kind: 'floor'; line: number; by: Player; turns: number }
-  | { kind: 'lockdown'; by: Player; turns: number };
+  | { kind: 'lockdown'; by: Player; turns: number }
+  | { kind: 'freeze'; by: Player; turns: number };
 
 /** What Rewind puts back: the board and effects at the start of the opponent's last turn. */
 export interface Snapshot {
@@ -149,6 +213,8 @@ export interface Snapshot {
 
 export interface AgentsState {
   picks: [AgentId, AgentId];
+  /** Simple rules (absent = Pro, for matches saved before Simple existed). */
+  simple?: boolean;
   /** Turns left on each power's cooldown (slots 0-2), per player. */
   cd: [number[], number[]];
   /** Ultimate pips. */
@@ -183,9 +249,10 @@ export type AgentMove = RotatingMove | CascadeMove | AbilityUse | PassMove;
 /** Cascade with agents: a round with no winner after this many turns is a draw (a safety net). */
 export const CASCADE_DRAW_TURNS = 120;
 
-export function newAgents(picks: [AgentId, AgentId]): AgentsState {
+export function newAgents(picks: [AgentId, AgentId], simple = false): AgentsState {
   return {
     picks: [picks[0], picks[1]],
+    ...(simple ? { simple: true } : {}),
     cd: [[0, 0, 0], [0, 0, 0]],
     ult: [0, 0],
     used: null,
@@ -203,9 +270,9 @@ export function newAgents(picks: [AgentId, AgentId]): AgentsState {
 
 /** A new round: cooldowns, effects and paint reset; picks and the ultimate meter carry over. */
 export function resetAgentsForRound(a: AgentsState, round: AgentRound): AgentsState {
-  const n = newAgents(a.picks);
-  const t = AGENT_TUNING[round.mode];
-  n.cd = [AGENTS[a.picks[0]].powers.map((id) => t.firstReady[id]), AGENTS[a.picks[1]].powers.map((id) => t.firstReady[id])];
+  const n = newAgents(a.picks, !!a.simple);
+  const t = tuning(round.mode, a.simple);
+  n.cd = [powersOf(a.picks[0], a.simple).map((id) => t.firstReady[id]), powersOf(a.picks[1], a.simple).map((id) => t.firstReady[id])];
   n.ult = [a.ult[0], a.ult[1]];
   n.start = snapshot(round, n);
   return n;
@@ -220,11 +287,11 @@ export const WETS_MOVE: ReadonlySet<AbilityId> = new Set<AbilityId>(['shove', 'o
  */
 export const wetsMove = (id: AbilityId, mode: AgentMode): boolean => WETS_MOVE.has(id) || ((id === 'flip' || id === 'rewind') && mode === 'rotating');
 
-export const tuning = (mode: AgentMode): ModeTuning => AGENT_TUNING[mode];
+export const tuning = (mode: AgentMode, simple?: boolean): ModeTuning => (simple ? SIMPLE_TUNING : AGENT_TUNING)[mode];
 export const ultCostOf = (t: ModeTuning, agent: AgentId): number => t.ultCost[AGENTS[agent].ult];
 export const isUlt = (id: AbilityId): id is UltId => id === 'chrome' || id === 'lockdown' || id === 'flip' || id === 'rewind';
-export const slotOf = (agent: AgentId, id: AbilityId): number => (AGENTS[agent].powers as readonly AbilityId[]).indexOf(id);
-export const abilitiesOf = (agent: AgentId): AbilityId[] => [...AGENTS[agent].powers, AGENTS[agent].ult];
+export const slotOf = (agent: AgentId, id: AbilityId, simple = false): number => (powersOf(agent, simple) as readonly AbilityId[]).indexOf(id);
+export const abilitiesOf = (agent: AgentId, simple = false): AbilityId[] => [...powersOf(agent, simple), AGENTS[agent].ult];
 
 // Hand-written copies: the simulations run millions of these, so no JSON round trips.
 function copyRound(r: AgentRound): AgentRound {
@@ -262,6 +329,7 @@ function snapshot(round: AgentRound, a: AgentsState): Snapshot {
 function copyAgents(a: AgentsState): AgentsState {
   return {
     picks: [a.picks[0], a.picks[1]],
+    ...(a.simple ? { simple: true } : {}),
     cd: [a.cd[0].slice(), a.cd[1].slice()],
     ult: [a.ult[0], a.ult[1]],
     used: a.used,
@@ -287,7 +355,7 @@ interface W {
   t: ModeTuning;
 }
 
-const working = (r: AgentRound, a: AgentsState): W => ({ r: copyRound(r), a: copyAgents(a), ev: [], t: tuning(r.mode) });
+const working = (r: AgentRound, a: AgentsState): W => ({ r: copyRound(r), a: copyAgents(a), ev: [], t: tuning(r.mode, a.simple) });
 
 const effectAt = (w: W, kind: 'tape' | 'trap' | 'seal', cell: number) =>
   w.a.effects.find((e) => e.kind === kind && 'cell' in e && e.cell === cell) as Extract<Effect, { cell: number }> | undefined;
@@ -296,6 +364,7 @@ const taped = (w: W, cell: number) => !!effectAt(w, 'tape', cell);
 /** Chrome and sealed marks can't be moved or wiped by powers. */
 const shielded = (w: W, cell: number) => w.a.chrome[cell] || sealed(w, cell);
 const lockedDown = (w: W, p: Player) => w.a.effects.some((e) => e.kind === 'lockdown' && e.by !== p);
+const frozen = (w: W, p: Player) => w.a.effects.some((e) => e.kind === 'freeze' && e.by !== p);
 
 /** Whether a full line counts for its owner now. */
 function counts(w: W, li: number, owner: Player): boolean {
@@ -450,7 +519,9 @@ function resolve(w: W, mover: Player, firstWave = 1): void {
   const r = w.r as CascadeState;
   for (let wave = firstWave; ; wave++) {
     if (!anyFullLine(r.cells)) break;
-    const lines = [countingLines(w, 0), countingLines(w, 1)].map((ls) => ls.filter((li) => LINES[li].some((c) => !sealed(w, c))));
+    // A sealed cube (Pro's Fixative, Simple's Shield) stays put when its line bursts.
+    const stays = (c: number) => sealed(w, c);
+    const lines = [countingLines(w, 0), countingLines(w, 1)].map((ls) => ls.filter((li) => LINES[li].some((c) => !stays(c))));
     if (!lines[0].length && !lines[1].length) break;
     const cleared = new Set<number>();
     for (const q of [0, 1] as const) {
@@ -459,7 +530,7 @@ function resolve(w: W, mover: Player, firstWave = 1): void {
         const line = LINES[li];
         w.ev.push({ type: 'lineCompleted', player: q, cells: line, wave });
         pts += wave * (line.some((c) => w.a.chrome[c]) ? w.t.chromeScore : 1);
-        line.forEach((c) => !sealed(w, c) && cleared.add(c));
+        line.forEach((c) => !stays(c) && cleared.add(c));
       }
       if (pts) {
         r.scores[q] += pts;
@@ -506,7 +577,7 @@ function afterAction(w: W, mover: Player): void {
 function endTurn(w: W, p: Player): void {
   const a = w.a;
   const used = a.used;
-  const slot = used && !isUlt(used) ? slotOf(a.picks[p], used) : -1;
+  const slot = used && !isUlt(used) ? slotOf(a.picks[p], used, a.simple) : -1;
   a.cd[p] = a.cd[p].map((v, i) => (i === slot ? v : Math.max(0, v - 1)));
   a.ult[p] = Math.min(ultCostOf(w.t, a.picks[p]), a.ult[p] + w.t.ultPerTurn);
   for (const e of a.effects) if (e.by !== p) e.turns--;
@@ -549,7 +620,22 @@ export function checkAgentMove(r: AgentRound, a: AgentsState, move: AgentMove): 
   if (r.result) return 'round-over';
   if (move.kind === 'ability') return checkAbility(r, a, move);
   if (move.kind === 'pass') return legalAgentMoves(r, a).length ? 'must-move' : null;
-  const w = { r, a, ev: [], t: tuning(r.mode) } as W;
+  const why = checkNormal(r, a, move);
+  if (why || !a.simple || !a.used) return why;
+  // Simple rules: on a power turn you can't finish a line of your own.
+  return finishesOwnLine(r, a, () => applyNormal(r, a, move)) ? 'power-turn' : null;
+}
+
+/** Would this (already legal) action win the round or score for the player to move? */
+function finishesOwnLine(r: AgentRound, a: AgentsState, act: () => { round: AgentRound; agents: AgentsState; events: GameEvent[] }): boolean {
+  const p = r.turn;
+  const out = act();
+  if (out.round.mode === 'rotating') return out.round.result?.winner === p;
+  return out.events.some((e) => e.type === 'scored' && e.player === p);
+}
+
+function checkNormal(r: AgentRound, a: AgentsState, move: RotatingMove | CascadeMove): IllegalReason | null {
+  const w = { r, a, ev: [], t: tuning(r.mode, a.simple) } as W;
   if (r.mode === 'rotating') {
     if (move.kind === 'drop') return 'wrong-mode';
     if (move.kind === 'place') {
@@ -577,6 +663,8 @@ export function checkAgentMove(r: AgentRound, a: AgentsState, move: AgentMove): 
 
 /** A twist whose layer holds a sealed mark is blocked (Fixative). */
 function layerSealed(w: W, t: Twist): boolean {
+  // Simple rules' Shield only protects the mark; it doesn't lock layers.
+  if (w.a.simple) return false;
   return w.a.effects.some((e) => e.kind === 'seal' && coord(e.cell)[t.axis] === t.slice);
 }
 function layerShielded(w: W, t: Twist): boolean {
@@ -613,6 +701,11 @@ export function applyAgentMove(r: AgentRound, a: AgentsState, move: AgentMove): 
   const why = checkAgentMove(r, a, move);
   if (why) throw new IllegalMove(why);
   if (move.kind === 'ability') return applyAbility(r, a, move);
+  return applyNormal(r, a, move);
+}
+
+/** A normal move (or a pass), already checked. */
+function applyNormal(r: AgentRound, a: AgentsState, move: RotatingMove | CascadeMove | PassMove): { round: AgentRound; agents: AgentsState; events: GameEvent[] } {
   const w = working(r, a);
   const p = w.r.turn;
   let mark = -1;
@@ -707,14 +800,15 @@ export function abilityBlocked(r: AgentRound, a: AgentsState, id: AbilityId): Il
   if (r.result) return 'round-over';
   const p = r.turn;
   const agent = a.picks[p];
-  const t = tuning(r.mode);
-  if (!abilitiesOf(agent).includes(id)) return 'not-your-power';
+  const t = tuning(r.mode, a.simple);
+  if (!abilitiesOf(agent, a.simple).includes(id)) return 'not-your-power';
   if (a.used) return 'power-used';
   const w = { r, a, ev: [], t } as W;
   if (lockedDown(w, p)) return 'locked-down';
+  if (frozen(w, p)) return 'frozen';
   if (isUlt(id)) {
     if (a.ult[p] < ultCostOf(t, agent)) return 'ult-not-ready';
-  } else if (a.cd[p][slotOf(agent, id)] > 0) return 'cooldown';
+  } else if (a.cd[p][slotOf(agent, id, a.simple)] > 0) return 'cooldown';
   if (!abilityUses(r, a, id, true).length) return 'no-target';
   return null;
 }
@@ -723,7 +817,7 @@ export function abilityBlocked(r: AgentRound, a: AgentsState, id: AbilityId): Il
 export function abilityUses(r: AgentRound, a: AgentsState, id: AbilityId, any = false): AbilityUse[] {
   const p = r.turn;
   const o = other(p);
-  const w = { r, a, ev: [], t: tuning(r.mode) } as W;
+  const w = { r, a, ev: [], t: tuning(r.mode, a.simple) } as W;
   const cells = r.cells;
   const out: AbilityUse[] = [];
   const add = (u: Omit<AbilityUse, 'kind' | 'id'>) => out.push({ kind: 'ability', id, ...u });
@@ -773,7 +867,26 @@ export function abilityUses(r: AgentRound, a: AgentsState, id: AbilityId, any = 
       else for (const c of openColumns()) add({ cells: [c] });
       break;
     case 'fixative':
+    case 'shield':
       for (let c = 0; c < CELLS; c++) if (cells[c] === p && !sealed(w, c)) add({ cells: [c] });
+      break;
+    case 'relocate':
+      // Slide one of your marks into an empty cell next to it (Cascade: move a top cube
+      // onto another column).
+      for (let c = 0; c < CELLS; c++) {
+        if (cells[c] !== p || shielded(w, c)) continue;
+        if (rot) {
+          for (const n of NEIGHBOURS[c]) if (n !== CENTER && cells[n] === null && !taped(w, n)) add({ cells: [c, n] });
+        } else {
+          const col = columnOf(c);
+          if (topOf(cells, col) !== c) continue;
+          for (let k = 0; k < 9; k++) {
+            if (k === col) continue;
+            const l = landing(cells, k);
+            if (l >= 0 && !taped(w, l)) add({ cells: [c, l] });
+          }
+        }
+      }
       break;
     case 'wetFloor':
       for (let li = 0; li < LINES.length; li++) {
@@ -815,6 +928,7 @@ export function abilityUses(r: AgentRound, a: AgentsState, id: AbilityId, any = 
       }
       break;
     }
+    case 'freeze':
     case 'delay':
     case 'reverb':
     case 'chrome':
@@ -830,6 +944,15 @@ export function abilityUses(r: AgentRound, a: AgentsState, id: AbilityId, any = 
       if (a.prev && !a.prev.round.result) add({});
       break;
   }
+  // Simple rules: a power that would finish a line of your own isn't allowed.
+  if (a.simple) {
+    const ok: AbilityUse[] = [];
+    for (const u of out) {
+      if (!finishesOwnLine(r, a, () => applyAbilityUnchecked(r, a, u))) ok.push(u);
+      if (any && ok.length) break;
+    }
+    return ok;
+  }
   return any ? out.slice(0, 1) : out;
 }
 
@@ -843,6 +966,10 @@ export function checkAbility(r: AgentRound, a: AgentsState, u: AbilityUse): Ille
 export function applyAbility(r: AgentRound, a: AgentsState, u: AbilityUse): { round: AgentRound; agents: AgentsState; events: GameEvent[] } {
   const why = checkAbility(r, a, u);
   if (why) throw new IllegalMove(why);
+  return applyAbilityUnchecked(r, a, u);
+}
+
+function applyAbilityUnchecked(r: AgentRound, a: AgentsState, u: AbilityUse): { round: AgentRound; agents: AgentsState; events: GameEvent[] } {
   const w = working(r, a);
   const p = w.r.turn;
   const o = other(p);
@@ -852,7 +979,7 @@ export function applyAbility(r: AgentRound, a: AgentsState, u: AbilityUse): { ro
   const agent = w.a.picks[p];
   w.a.used = u.id;
   if (isUlt(u.id)) w.a.ult[p] = 0;
-  else w.a.cd[p][slotOf(agent, u.id)] = t.cooldown[u.id as PowerId];
+  else w.a.cd[p][slotOf(agent, u.id, w.a.simple)] = t.cooldown[u.id as PowerId];
   w.ev.push({ type: 'ability', player: p, agent, id: u.id, cells: cells.slice(), twists: twists.map((x) => ({ ...x })) });
   const rot = w.r.mode === 'rotating';
   switch (u.id) {
@@ -880,7 +1007,19 @@ export function applyAbility(r: AgentRound, a: AgentsState, u: AbilityUse): { ro
       else for (const c of COLUMNS[columnOf(cells[0])]) if (w.r.cells[c] === null) w.a.effects.push({ kind: 'tape', cell: c, by: p, turns: t.tapeTurns });
       break;
     case 'fixative':
+    case 'shield':
       w.a.effects.push({ kind: 'seal', cell: cells[0], by: p, turns: t.fixativeTurns });
+      break;
+    case 'relocate': {
+      const [from, to] = cells;
+      moveMark(w, from, to);
+      w.ev.push({ type: 'moved', moves: [{ from, to, player: p }] });
+      if (!rot) settle(w, 1, false);
+      afterAction(w, p);
+      break;
+    }
+    case 'freeze':
+      w.a.effects.push({ kind: 'freeze', by: p, turns: 1 });
       break;
     case 'wetFloor':
       w.a.effects.push({ kind: 'floor', line: lineThrough(cells[0], cells[1]), by: p, turns: t.wetFloorTurns });
@@ -1011,8 +1150,8 @@ export interface AbilityStatus {
 
 export function abilityStatus(r: AgentRound, a: AgentsState, p: Player): AbilityStatus[] {
   const agent = a.picks[p];
-  const t = tuning(r.mode);
-  return abilitiesOf(agent).map((id, i) => ({
+  const t = tuning(r.mode, a.simple);
+  return abilitiesOf(agent, a.simple).map((id, i) => ({
     id,
     ult: i === 3,
     cooldown: i < 3 ? a.cd[p][i] : 0,

@@ -16,10 +16,15 @@ import { rng } from '../src/core/rng.ts';
 // The same seeds and size as `npm run simulate -- agents` (204 matches per pairing),
 // sliced by seed and noise level and spread over every core.
 const OPTIONS: SweepOptions = { matchesPerSeed: 34, seeds: [1, 2, 3], noises: [0.1, 0.3] };
+// Simple rules (the default): a smaller sweep, same checks (72 matches per pairing).
+const SIMPLE: SweepOptions = { matchesPerSeed: 12, seeds: [1, 2, 3], noises: [0.1, 0.3], simple: true };
+type Run = 'rotating' | 'cascade' | 'rotating-simple' | 'cascade-simple';
 
-function slice(mode: 'rotating' | 'cascade', seed: number, noise: number): Promise<SweepResult> {
+function slice(run: Run, seed: number, noise: number): Promise<SweepResult> {
+  const mode = run.startsWith('rotating') ? 'rotating' : 'cascade';
+  const base = run.endsWith('simple') ? SIMPLE : OPTIONS;
   return new Promise((resolve, reject) => {
-    const options: SweepOptions = { ...OPTIONS, seeds: [seed], noises: [noise] };
+    const options: SweepOptions = { ...base, seeds: [seed], noises: [noise] };
     const w = new Worker(new URL('./sweep-worker.ts', import.meta.url), { workerData: { mode, options } });
     w.once('message', (r) => {
       void w.terminate();
@@ -30,10 +35,11 @@ function slice(mode: 'rotating' | 'cascade', seed: number, noise: number): Promi
 }
 
 /** Run every slice through a pool of workers, one per core. */
-async function sweepAll(): Promise<Record<'rotating' | 'cascade', SweepResult>> {
-  const jobs: { mode: 'rotating' | 'cascade'; seed: number; noise: number }[] = [];
-  for (const mode of ['rotating', 'cascade'] as const) for (const seed of OPTIONS.seeds) for (const noise of OPTIONS.noises) jobs.push({ mode, seed, noise });
-  const out: Record<'rotating' | 'cascade', SweepResult[]> = { rotating: [], cascade: [] };
+const RUNS: Run[] = ['rotating', 'cascade', 'rotating-simple', 'cascade-simple'];
+async function sweepAll(): Promise<Record<Run, SweepResult>> {
+  const jobs: { mode: Run; seed: number; noise: number }[] = [];
+  for (const mode of RUNS) for (const seed of OPTIONS.seeds) for (const noise of OPTIONS.noises) jobs.push({ mode, seed, noise });
+  const out: Record<Run, SweepResult[]> = { rotating: [], cascade: [], 'rotating-simple': [], 'cascade-simple': [] };
   let next = 0;
   const lane = async () => {
     while (next < jobs.length) {
@@ -42,29 +48,30 @@ async function sweepAll(): Promise<Record<'rotating' | 'cascade', SweepResult>> 
     }
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(jobs.length, availableParallelism())) }, lane));
-  return { rotating: mergeSweeps(out.rotating), cascade: mergeSweeps(out.cascade) };
+  return Object.fromEntries(RUNS.map((k) => [k, mergeSweeps(out[k])])) as Record<Run, SweepResult>;
 }
 
 const all = sweepAll();
-const runs = { rotating: all.then((r) => r.rotating), cascade: all.then((r) => r.cascade) };
 
-for (const mode of ['rotating', 'cascade'] as const) {
-  test(`${mode}: every agent pairing is balanced (${OPTIONS.matchesPerSeed * OPTIONS.seeds.length * OPTIONS.noises.length} matches per pairing)`, { timeout: 600_000 }, async () => {
-    const r = await runs[mode];
+for (const mode of RUNS) {
+  const o = mode.endsWith('simple') ? SIMPLE : OPTIONS;
+  const n = o.matchesPerSeed * o.seeds.length * o.noises.length;
+  test(`${mode}: every agent pairing is balanced (${n} matches per pairing)`, { timeout: 900_000 }, async () => {
+    const r = (await all)[mode];
     const fails = sweepFailures(r);
     if (fails.length) console.log(printSweep(r));
     assert.deepEqual(fails, [], printSweep(r));
     // The checks, spelled out (sweepFailures covers them all):
-    for (const p of r.pairs) assert.equal(p.matches, OPTIONS.matchesPerSeed * OPTIONS.seeds.length * OPTIONS.noises.length);
+    for (const p of r.pairs) assert.equal(p.matches, n);
     for (const id of AGENT_IDS) assert.ok(r.baseline[id].played > 0);
   });
 }
 
 test('the bot never picks an illegal action, with or without powers', () => {
   const random = rng(77);
-  for (const mode of ['rotating', 'cascade'] as const) {
+  for (const [mode, simple] of [['rotating', false], ['cascade', false], ['rotating', true], ['cascade', true]] as const) {
     for (const a of AGENT_IDS) {
-      let m = newMatch(mode, 0, [a, AGENT_IDS[(AGENT_IDS.indexOf(a) + 1) % 4]]);
+      let m = newMatch(mode, 0, [a, AGENT_IDS[(AGENT_IDS.indexOf(a) + 1) % 4]], simple);
       while (m.winner === null) {
         if (m.round.result) m = nextRound(m);
         for (const act of agentBotTurn(m, random, { ...AGENT_BOT, noise: 0.3 })) {

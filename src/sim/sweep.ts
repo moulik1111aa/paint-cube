@@ -15,6 +15,8 @@ export interface SweepOptions {
   noises: number[];
   /** Matches per agent against the no-powers baseline, per seed and noise (default: same). */
   baselineMatches?: number;
+  /** Simple rules (default: Pro). */
+  simple?: boolean;
 }
 
 export interface PairResult {
@@ -27,6 +29,8 @@ export interface PairResult {
 
 export interface SweepResult {
   mode: 'rotating' | 'cascade';
+  /** Simple rules. */
+  simple?: boolean;
   pairs: PairResult[];
   /** Per agent: matches won / played against the other three agents (mirrors excluded). */
   agentShare: Record<AgentId, { won: number; played: number }>;
@@ -50,6 +54,7 @@ const blank = <T>(f: () => T): Record<AgentId, T> => Object.fromEntries(AGENT_ID
 export function agentSweep(mode: 'rotating' | 'cascade', o: SweepOptions): SweepResult {
   const res: SweepResult = {
     mode,
+    simple: !!o.simple,
     pairs: [],
     agentShare: blank(() => ({ won: 0, played: 0 })),
     starterRoundWins: 0,
@@ -62,7 +67,8 @@ export function agentSweep(mode: 'rotating' | 'cascade', o: SweepOptions): Sweep
     winningTurns: blank(() => ({})),
     baseline: blank(() => ({ won: 0, played: 0 })),
   };
-  for (const id of AGENT_IDS) for (const ab of abilitiesOf(id)) res.usage[id][ab] = { used: 0, rounds: 0 };
+  const simple = !!o.simple;
+  for (const id of AGENT_IDS) for (const ab of abilitiesOf(id, simple)) res.usage[id][ab] = { used: 0, rounds: 0 };
   const turns: number[] = [];
   const bot = (noise: number, usePowers = true): AgentBotOptions => ({ ...AGENT_BOT, noise, usePowers });
 
@@ -78,7 +84,7 @@ export function agentSweep(mode: 'rotating' | 'cascade', o: SweepOptions): Sweep
             const flip = g % 2 === 1;
             const picks: [AgentId, AgentId] = flip ? [b, a] : [a, b];
             const starter = (Math.floor(g / 2) % 2) as Player;
-            const st = agentBotMatch(mode, picks, random, [bot(noise), bot(noise)], starter);
+            const st = agentBotMatch(mode, picks, random, [bot(noise), bot(noise)], starter, simple);
             pr.matches++;
             const aSeat: Player = flip ? 1 : 0;
             if (st.winner === aSeat) pr.aWins++;
@@ -89,7 +95,7 @@ export function agentSweep(mode: 'rotating' | 'cascade', o: SweepOptions): Sweep
             turns.push(...st.roundTurns);
             for (const seat of [0, 1] as const) {
               const agent = picks[seat];
-              for (const ab of abilitiesOf(agent)) {
+              for (const ab of abilitiesOf(agent, simple)) {
                 const u = res.usage[agent][ab];
                 u.rounds += st.rounds;
                 u.used += st.roundsUsing[seat].get(ab) ?? 0;
@@ -119,7 +125,7 @@ export function agentSweep(mode: 'rotating' | 'cascade', o: SweepOptions): Sweep
           const other = AGENT_IDS[(AGENT_IDS.indexOf(a) + 1 + (g % 3)) % 4];
           const picks: [AgentId, AgentId] = flip ? [other, a] : [a, other];
           const opts: [AgentBotOptions, AgentBotOptions] = flip ? [bot(noise, false), bot(noise)] : [bot(noise), bot(noise, false)];
-          const st = agentBotMatch(mode, picks, random, opts, (Math.floor(g / 2) % 2) as Player);
+          const st = agentBotMatch(mode, picks, random, opts, (Math.floor(g / 2) % 2) as Player, simple);
           res.baseline[a].played++;
           if (st.winner === (flip ? 1 : 0)) res.baseline[a].won++;
         }
@@ -200,9 +206,12 @@ export function sweepFailures(r: SweepResult): string[] {
     for (const [k, n] of Object.entries(wt)) {
       if (k !== '-' && n / total > 0.5) f.push(`${id} ${k} is on ${pct(n, total)} of its winning turns (want <= 50%)`);
     }
+    // Simple powers can't finish a line on the turn they're used, so their edge over a
+    // bot that never uses them varies more by writer: a wider sanity band.
+    const [blo, bhi] = r.simple ? [0.4, 0.9] : [0.5, 0.8];
     const b = r.baseline[id];
     const bs = b.won / b.played;
-    if (bs < 0.5 || bs > 0.8) f.push(`${id} beats the no-powers bot ${pct(b.won, b.played)} (want 50-80%)`);
+    if (bs < blo || bs > bhi) f.push(`${id} beats the no-powers bot ${pct(b.won, b.played)} (want ${blo * 100}-${bhi * 100}%)`);
   }
   return f;
 }

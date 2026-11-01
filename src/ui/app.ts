@@ -7,6 +7,7 @@ import { loadThree } from '../render/three.ts';
 import { createBoard, type Board } from '../render/board.ts';
 import { fontsReady } from '../render/street.ts';
 import { Sfx } from '../audio/sfx.ts';
+import { Music, TRACKS } from '../audio/music.ts';
 import { coord, type Player } from '../core/geometry.ts';
 import { MAX_MARKS } from '../core/rotating.ts';
 import { landing } from '../core/cascade.ts';
@@ -18,13 +19,13 @@ import { rng } from '../core/rng.ts';
 import { cleanName, loadMatch, loadPrefs, saveMatch, savePrefs, type HelpTopic, type PcLevel, type Prefs } from '../storage/prefs.ts';
 import {
   AGENTS, AGENT_IDS, abilitiesOf, abilityBlocked, abilityStatus, abilityUses, decorOf, isUlt, lineThrough,
-  type AbilityId, type AbilityUse, type AgentId, type AgentsState, type AgentRound,
+  ONCE, type AbilityId, type AbilityUse, type AgentId, type AgentsState, type AgentRound,
 } from '../core/agents.ts';
 import { CENTER, LINES } from '../core/geometry.ts';
 import { ABILITY_TEXT, AGENT_LOOK, abilityIcon, abilityText, agentArt, playPreview } from './agents-ui.ts';
 import { haptics } from '../platform/haptics.ts';
 import { voice } from '../platform/voice.ts';
-import { ALL_TOPICS, abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, type Lesson, type Topic } from './lessons.ts';
+import { abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, topicsFor, type Lesson, type Topic } from './lessons.ts';
 import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
 import { connectFirebase } from '../net/firebase.ts';
 import { FIREBASE } from '../net/config.ts';
@@ -49,9 +50,21 @@ declare global {
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const COLORS = ['p1', 'p2'] as const;
-const PLAYER_COLORS_CSS = ['#ff7a1a', '#1aa3ff'];
+import { THEMES, playerCss, setTheme, theme } from '../theme.ts';
+let PLAYER_COLORS_CSS = playerCss();
 
 /** How to play, per mode (and for Agents): short cards, one idea each. */
+/** Agents how-to cards for the Simple rules. */
+const HELP_SIMPLE: { title: string; cards: [string, string, Topic?][] } = {
+  title: 'Agents',
+  cards: [
+    ['Using a power', 'Your writer has 3 powers and an ultimate, in the bar at the bottom. On your turn: tap a power, tap a glowing cell, then make your normal move.', 'powers'],
+    ['Power turns', 'One rule to remember: on a turn you use a power, you can’t finish a line of your own. Finish it on a later turn, if it’s still open.', 'powerTurn'],
+    ['Once a round', 'Each power works once per round. A used power shows a tick. Every new round, they’re all ready again.', 'timers'],
+    ['Ultimate', 'The last button’s ring fills a bit every turn. When it says READY, fire it: it’s your writer’s big move.', 'ult'],
+  ],
+};
+
 const HELP: Record<HelpTopic, { title: string; cards: [string, string, Topic?][] }> = {
   agents: {
     title: 'Agents',
@@ -66,7 +79,7 @@ const HELP: Record<HelpTopic, { title: string; cards: [string, string, Topic?][]
     title: 'Twist',
     cards: [
       ['Spray a cell', 'Tap any cell to paint it. Get 3 in a row in any direction: across a face, through the layers, or corner to corner.'],
-      ['Only 3 marks', 'You can hold 3 marks. Paint a 4th and your oldest fades away. It dries out and cracks first, so you can see it coming.'],
+      ['Only 3 marks', 'You can hold 3 marks. Paint a 4th and your oldest fades away. The numbers on your marks show their order: 1 is your oldest, the next to fade. It cracks first, so you can see it coming.'],
       ['Or twist a layer', 'Swipe across the cube to turn a layer, then tap ✓. Everything on it moves. No twisting twice in a row, and no undoing the last twist.'],
       ['The Core', 'The glowing middle cell can never be painted. Best of 3 rounds, and the starter swaps each round.'],
     ],
@@ -96,6 +109,8 @@ const REASONS: Partial<Record<IllegalReason, string>> = {
   'ult-not-ready': 'Ultimate not charged yet.',
   cooldown: 'Still cooling down.',
   'no-target': 'Nothing to use that on right now.',
+  'power-turn': 'Power turn: you can’t finish your own line this turn.',
+  frozen: 'Frozen: no powers this turn.',
   'bad-target': 'Not a valid target.',
 };
 
@@ -110,9 +125,20 @@ export function startApp(app: HTMLElement): void {
   const toastEl = root.querySelector('.toast') as HTMLElement;
   const sfx = new Sfx();
   let prefs: Prefs = loadPrefs();
+  setTheme(prefs.theme);
+  PLAYER_COLORS_CSS = playerCss();
   sfx.enabled = prefs.sound;
   haptics.enabled = prefs.sound;
   voice.enabled = prefs.voice;
+  const music = new Music();
+  // Music starts on the first tap (browsers and WebViews need a gesture for sound).
+  if (!manual) {
+    const startMusic = () => {
+      document.removeEventListener('pointerdown', startMusic, true);
+      music.set(prefs.music);
+    };
+    document.addEventListener('pointerdown', startMusic, true);
+  }
   let board: Board | null = null;
   let screen = 'loading';
   let match: MatchState | null = null;
@@ -120,6 +146,8 @@ export function startApp(app: HTMLElement): void {
   /** Playing against the PC (it is player 2), at this difficulty. */
   let pc: PcLevel | null = null;
   let pcBusy = false;
+  /** Simple rules for the current (or last) agents match. */
+  const simpleNow = () => (match?.agents ? !!match.agents.simple : !prefs.pro);
   /** Trial: your powers and ultimate are always ready (vs an easy PC; not saved). */
   let trial = false;
   const pcRandom = rng(Date.now() % 100000);
@@ -159,6 +187,7 @@ export function startApp(app: HTMLElement): void {
     board.attract = true;
     board.setTurn(null);
     board.decorate(null);
+    board.ages(null);
     board.highlight(null);
     const mode: Mode = Math.random() < 0.5 ? 'rotating' : 'cascade';
     demo = newMatch(mode, 0);
@@ -281,7 +310,9 @@ export function startApp(app: HTMLElement): void {
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
         `<button class="link" data-go="sound">Sound &amp; buzz: ${prefs.sound ? 'on' : 'off'}</button>` +
-        `<button class="link" data-go="voice">Voice: ${prefs.voice ? 'on' : 'off'}</button></div>` +
+        `<button class="link" data-go="voice">Voice: ${prefs.voice ? 'on' : 'off'}</button>` +
+        `<button class="link" data-go="music">Music: ${TRACKS.find((x) => x.id === prefs.music)?.name ?? 'Off'}</button>` +
+        `<button class="link" data-go="theme">Look: ${THEMES.find((x) => x.id === prefs.theme)?.name}</button></div>` +
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
     void leaveOnline();
@@ -302,6 +333,21 @@ export function startApp(app: HTMLElement): void {
       toast(s ? `3D: ${s.ratio.toFixed(2)}x sharpness · ${s.fps || '…'} fps · quality ${s.levels - s.level}/${s.levels}` : '3D is still loading');
     });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
+    ui.querySelector('[data-go="theme"]')!.addEventListener('click', () => {
+      const i = THEMES.findIndex((x) => x.id === prefs.theme);
+      prefs = { ...prefs, theme: THEMES[(i + 1) % THEMES.length].id };
+      savePrefs(prefs);
+      // The 3D scene is built in its look: start again in the new one.
+      location.reload();
+    });
+    ui.querySelector('[data-go="music"]')!.addEventListener('click', () => {
+      const i = TRACKS.findIndex((x) => x.id === prefs.music);
+      const next = TRACKS[(i + 1) % TRACKS.length].id;
+      prefs = { ...prefs, music: next };
+      savePrefs(prefs);
+      if (!manual) music.set(next);
+      homeScreen();
+    });
     ui.querySelector('[data-go="voice"]')!.addEventListener('click', () => {
       setVoice(!prefs.voice);
       homeScreen();
@@ -333,14 +379,20 @@ export function startApp(app: HTMLElement): void {
         '<button class="mode" data-mode="cascade"><b>Cascade</b><span>Drop paint down columns. Lines burst and score; falls chain into combos. First to 5.</span></button>' +
         '</div>' +
         '<button class="toggle" data-agents role="switch"><span class="txt"><b>Agents</b><span>Pick a writer with powers. Off = Classic.</span></span><i class="knob"></i></button>' +
+        '<button class="toggle small" data-pro role="switch"><span class="txt"><b>Pro abilities</b><span>The full set: wet paint, cooldowns, trickier powers.</span></span><i class="knob"></i></button>' +
         '<button class="btn big" data-go="start">Start · best of 3</button>',
     );
     let agentsOn = prefs.agents;
+    let pro = prefs.pro;
     const mark = () => {
       ui.querySelectorAll<HTMLElement>('.mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
       const t = ui.querySelector('[data-agents]') as HTMLElement;
       t.classList.toggle('on', agentsOn);
       t.setAttribute('aria-checked', String(agentsOn));
+      const pr = ui.querySelector('[data-pro]') as HTMLElement;
+      pr.hidden = !agentsOn;
+      pr.classList.toggle('on', pro);
+      pr.setAttribute('aria-checked', String(pro));
       ui.querySelectorAll<HTMLElement>('.level').forEach((b) => {
         b.classList.toggle('on', b.dataset.level === level);
         b.setAttribute('aria-checked', String(b.dataset.level === level));
@@ -350,6 +402,10 @@ export function startApp(app: HTMLElement): void {
     mark();
     ui.querySelector('[data-agents]')!.addEventListener('click', () => {
       agentsOn = !agentsOn;
+      mark();
+    });
+    ui.querySelector('[data-pro]')!.addEventListener('click', () => {
+      pro = !pro;
       mark();
     });
     ui.querySelectorAll<HTMLElement>('.mode').forEach((b) =>
@@ -367,7 +423,7 @@ export function startApp(app: HTMLElement): void {
     ui.querySelector('.back')!.addEventListener('click', homeScreen);
     ui.querySelector('[data-go="start"]')!.addEventListener('click', () => {
       if (vsPc) {
-        prefs = { ...prefs, mode, agents: agentsOn, pcLevel: level };
+        prefs = { ...prefs, mode, agents: agentsOn, pcLevel: level, pro };
         savePrefs(prefs);
         names = [prefs.nickname, 'PC'];
         pc = level;
@@ -382,7 +438,7 @@ export function startApp(app: HTMLElement): void {
       }
       pc = null;
       const p2 = cleanName((ui.querySelector('#p2') as HTMLInputElement).value);
-      prefs = { ...prefs, player2: p2, mode, agents: agentsOn };
+      prefs = { ...prefs, player2: p2, mode, agents: agentsOn, pro };
       savePrefs(prefs);
       names = [prefs.nickname, p2 || 'Player 2'];
       if (!agentsOn) return startMatch(mode);
@@ -400,7 +456,8 @@ export function startApp(app: HTMLElement): void {
 
   /** The full Agents tutorial: every idea, each shown on the cube. */
   function agentsTutorial(then?: () => void): void {
-    runLessons(ALL_TOPICS.map(topicLesson), () => then?.());
+    const simple = simpleNow();
+    runLessons(topicsFor(simple).map((t) => topicLesson(t, simple)), () => then?.());
   }
 
   /**
@@ -408,6 +465,9 @@ export function startApp(app: HTMLElement): void {
    * then put the board back as it was and run `back`.
    */
   function runLessons(lessons: Lesson[], back: () => void): void {
+    // Lessons call the players Orange and Blue; in the Notebook look the pens are blue and red.
+    const penWords = (text: string) =>
+      theme() === 'notebook' ? text.replace(/\bBlue\b/g, '\u0000').replace(/\bOrange\b/g, 'Blue').replace(/\u0000/g, 'Red') : text;
     if (!board || lessons.length === 0) return back();
     const b = board;
     const wasMatch = screen === 'match' && match ? match : null;
@@ -443,6 +503,7 @@ export function startApp(app: HTMLElement): void {
       } else {
         b.sync(Array(27).fill(null));
         b.decorate(null);
+        b.ages(null);
       }
       back();
     };
@@ -463,10 +524,10 @@ export function startApp(app: HTMLElement): void {
       const st = l.steps[si];
       const last = si === l.steps.length - 1;
       const lastAll = last && li === lessons.length - 1;
-      const who = m?.agents ? `<span class="whoacts ${COLORS[m.round.turn]}">${m.round.turn === 0 ? 'Orange' : 'Blue'} · ${AGENTS[m.agents.picks[m.round.turn]].name}</span>` : '';
+      const who = m?.agents ? `<span class="whoacts ${COLORS[m.round.turn]}">${penWords(m.round.turn === 0 ? 'Orange' : 'Blue')} · ${AGENTS[m.agents.picks[m.round.turn]].name}</span>` : '';
       el.innerHTML =
         `<div class="top"><p class="kicker">Show me · ${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p>${voiceBtn()}<button class="x" data-close aria-label="Close">✕</button></div>` +
-        `<div class="say">${who}<p>${esc(st.say)}</p>` +
+        `<div class="say">${who}<p>${esc(penWords(st.say))}</p>` +
         `<div class="pips">${l.steps.map((_, k) => `<i class="${k === si ? 'on' : k < si ? 'done' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-replay>↺ Replay</button>` +
         `<button class="btn" data-next ${running ? 'disabled' : ''}>${lastAll ? 'Done' : last ? 'Next lesson' : 'Next'}</button></div></div>` +
@@ -478,7 +539,7 @@ export function startApp(app: HTMLElement): void {
         const v = el.querySelector('[data-voice]') as HTMLElement;
         v.textContent = prefs.voice ? '🔊' : '🔇';
         v.setAttribute('aria-pressed', String(prefs.voice));
-        if (prefs.voice) voice.say(st.say);
+        if (prefs.voice) voice.say(penWords(st.say));
       });
       el.querySelector('[data-replay]')!.addEventListener('click', () => void start(li));
       el.querySelector('[data-next]')!.addEventListener('click', () => {
@@ -499,11 +560,12 @@ export function startApp(app: HTMLElement): void {
       if (st.reset) {
         m = lessonStart(l, st.reset);
         b.sync(m.round.cells, crackingOf(m));
+        b.ages(agesOf(m));
         b.decorate(decorOf(m.round, m.agents!));
       }
       running = true;
       draw();
-      voice.say(st.say);
+      voice.say(penWords(st.say));
       show(st.focus ?? []);
       const moves = stepMoves(l, st, m!);
       if (moves.length) await sleep(1.4);
@@ -535,6 +597,7 @@ export function startApp(app: HTMLElement): void {
         await b.play(out.events);
         if (my !== token) return;
         b.decorate(decorOf(m.round, m.agents!));
+        b.ages(agesOf(m));
         bar(null);
         await sleep(0.35);
       }
@@ -552,6 +615,7 @@ export function startApp(app: HTMLElement): void {
       b.setMode(l.mode);
       b.sync(m.round.cells, crackingOf(m));
       b.decorate(decorOf(m.round, m.agents!));
+      b.ages(agesOf(m));
       await step(0);
     }
     void start(0);
@@ -563,6 +627,7 @@ export function startApp(app: HTMLElement): void {
     if (busy || pcBusy) return void toast('Wait for the move to finish.');
     const a = match.agents;
     const mode = match.mode;
+    const simple = !!a.simple;
     let t: Player = tab ?? match.round.turn;
     const sheet = document.createElement('div');
     sheet.className = 'review';
@@ -578,16 +643,18 @@ export function startApp(app: HTMLElement): void {
           .join('')}</div>` +
         `<ul class="rlist" style="--accent:${AGENT_LOOK[id].accent}">${st
           .map((x) => {
-            const state = x.ult ? (x.pips >= x.cost ? 'READY' : `${x.pips}/${x.cost}`) : x.cooldown > 0 ? `back in ${x.cooldown}` : 'ready';
+            const state = x.ult ? (x.pips >= x.cost ? 'READY' : `${x.pips}/${x.cost}`) : x.cooldown >= ONCE ? 'used this round' : x.cooldown > 0 ? `${simple ? 'from turn' : 'back in'} ${x.cooldown}` : 'ready';
             return (
               `<li><div class="rhead"><span class="ic ${x.ult ? 'ult' : ''}">${abilityIcon(x.id)}</span><b>${ABILITY_TEXT[x.id].name}</b><em>${x.ult ? 'ULT · ' : ''}${state}</em></div>` +
-              `<p>${abilityText(x.id, mode).replace(/^ULTIMATE\. /, '')}</p>` +
+              `<p>${abilityText(x.id, mode, simple).replace(/^ULTIMATE\. /, '')}</p>` +
               `<button class="link showme" data-show="${x.id}">▶ Show me</button></li>`
             );
           })
           .join('')}</ul>` +
-        '<div class="wetbox"><b>💧 Wet paint</b><p>A row with wet paint doesn’t count yet. Paint is wet when a power puts it down or moves it, on your move after Shove, Overspray, Spin or Fixative (in Twist, also Flip or Rewind), and on your next mark after the other player’s Delay. It dries at the start of its owner’s turn after next: if the row is still whole then, it counts.</p></div>' +
-        `<div class="topics">${ALL_TOPICS.map((k) => `<button class="chip" data-topic="${k}">▶ ${topicLesson(k).title}</button>`).join('')}</div></div>`;
+        (simple
+          ? '<div class="wetbox"><b>⚡ Power turns</b><p>On a turn you use a power, you can’t finish a line of your own. Each power works once per round.</p></div>'
+          : '<div class="wetbox"><b>💧 Wet paint</b><p>A row with wet paint doesn’t count yet. Paint is wet when a power puts it down or moves it, on your move after Shove, Overspray, Spin or Fixative (in Twist, also Flip or Rewind), and on your next mark after the other player’s Delay. It dries at the start of its owner’s turn after next: if the row is still whole then, it counts.</p></div>') +
+        `<div class="topics">${topicsFor(simple).map((k) => `<button class="chip" data-topic="${k}">▶ ${topicLesson(k, simple).title}</button>`).join('')}</div></div>`;
       sheet.querySelector('[data-close]')!.addEventListener('click', () => {
         sheet.remove();
         maybePc();
@@ -596,13 +663,13 @@ export function startApp(app: HTMLElement): void {
       sheet.querySelectorAll<HTMLElement>('[data-show]').forEach((x) =>
         x.addEventListener('click', () => {
           sheet.remove();
-          runLessons([abilityLesson(x.dataset.show as AbilityId, mode)], () => review(t));
+          runLessons([abilityLesson(x.dataset.show as AbilityId, mode, simple)], () => review(t));
         }),
       );
       sheet.querySelectorAll<HTMLElement>('[data-topic]').forEach((x) =>
         x.addEventListener('click', () => {
           sheet.remove();
-          runLessons([topicLesson(x.dataset.topic as Topic)], () => review(t));
+          runLessons([topicLesson(x.dataset.topic as Topic, simple)], () => review(t));
         }),
       );
     };
@@ -612,6 +679,7 @@ export function startApp(app: HTMLElement): void {
 
   // ---- Agents: select screen ----
   function agentSelect(p: Player, mode: Mode, picks: [AgentId, AgentId], then: () => void): void {
+    const simple = !prefs.pro;
     let i = AGENT_IDS.indexOf(picks[p]);
     let stopPreview: (() => void) | null = null;
     let open: AbilityId | null = null;
@@ -635,13 +703,13 @@ export function startApp(app: HTMLElement): void {
       card.innerHTML =
         `<img class="art" alt="" src="${agentArt(id)}">` +
         `<div class="who"><b>${a.name}</b><span class="role">${a.role}</span><span class="line">“${a.tagline}”</span></div>` +
-        `<ul class="powers">${abilitiesOf(id)
+        `<ul class="powers">${abilitiesOf(id, simple)
           .map(
             (ab) =>
               `<li><button class="pw ${isUlt(ab) ? 'ult' : ''} ${open === ab ? 'open' : ''}" data-pw="${ab}">${abilityIcon(ab)}<b>${ABILITY_TEXT[ab].name}</b>` +
               `<span>${isUlt(ab) ? 'ULT · ' : ''}${ABILITY_TEXT[ab].short}</span></button>` +
               (open === ab
-                ? `<div class="preview"><canvas width="220" height="190"></canvas><p>${abilityText(ab, mode)}</p>` +
+                ? `<div class="preview"><canvas width="220" height="190"></canvas><p>${abilityText(ab, mode, simple)}</p>` +
                   (board ? `<button class="btn alt showme" data-show="${ab}">▶ Show me on the cube</button>` : '') +
                   '</div>'
                 : '') +
@@ -661,7 +729,7 @@ export function startApp(app: HTMLElement): void {
       card.querySelector<HTMLElement>('[data-show]')?.addEventListener('click', (e) => {
         const ab = (e.currentTarget as HTMLElement).dataset.show as AbilityId;
         stopPreview?.();
-        runLessons([abilityLesson(ab, mode)], () => draw());
+        runLessons([abilityLesson(ab, mode, simple)], () => draw());
       });
     };
     const step = (d: number) => {
@@ -725,7 +793,8 @@ export function startApp(app: HTMLElement): void {
   const voiceBtn = () => `<button class="voice" data-voice aria-label="Read aloud" aria-pressed="${prefs.voice}">${prefs.voice ? '🔊' : '🔇'}</button>`;
 
   function help(mode: HelpTopic, then?: () => void, at = 0): void {
-    const h = HELP[mode];
+    const simple = simpleNow();
+    const h = mode === 'agents' && simple ? HELP_SIMPLE : HELP[mode];
     let i = at;
     const overlay = document.createElement('div');
     overlay.className = 'help';
@@ -748,7 +817,7 @@ export function startApp(app: HTMLElement): void {
       });
       overlay.querySelector('[data-show]')?.addEventListener('click', () => {
         overlay.remove();
-        runLessons([topicLesson(topic!)], () => help(mode, then, i));
+        runLessons([topicLesson(topic!, simple)], () => help(mode, then, i));
       });
     };
     const close = () => {
@@ -784,9 +853,9 @@ export function startApp(app: HTMLElement): void {
     if (!online && match && !trial) saveMatch({ match, names, ...(pc ? { pc } : {}) });
   };
 
-  function startMatch(mode: Mode, picks?: [AgentId, AgentId]): void {
+  function startMatch(mode: Mode, picks?: [AgentId, AgentId], simple = !prefs.pro): void {
     stopDemo();
-    match = newMatch(mode, 0, picks);
+    match = newMatch(mode, 0, picks, simple);
     persist();
     busy = false;
     if (board) {
@@ -838,12 +907,14 @@ export function startApp(app: HTMLElement): void {
         const off = !!x.blocked || allOff;
         const badge = x.ult
           ? `<span class="meter" style="--f:${Math.min(1, x.pips / x.cost)}"></span><em>${x.pips >= x.cost ? 'READY' : `${x.pips}/${x.cost}`}</em>`
-          : x.cooldown > 0
-            ? `<em class="cd">${x.cooldown}</em>`
-            : '';
+          : x.cooldown >= ONCE
+            ? '<em class="cd done" aria-hidden="true">✓</em>'
+            : x.cooldown > 0
+              ? `<em class="cd">${x.cooldown}</em>`
+              : '';
         return (
           `<button class="ab ${x.ult ? 'ult' : ''} ${off ? 'off' : ''} ${on === x.id ? 'on' : ''} ${a.used === x.id ? 'used' : ''}" data-ab="${x.id}" ` +
-          `aria-label="${ABILITY_TEXT[x.id].name}${x.cooldown ? `, ready in ${x.cooldown}` : ''}${x.ult ? `, ${x.pips} of ${x.cost}` : ''}">` +
+          `aria-label="${ABILITY_TEXT[x.id].name}${x.cooldown >= ONCE ? ', used this round' : x.cooldown ? `, ready in ${x.cooldown}` : ''}${x.ult ? `, ${x.pips} of ${x.cost}` : ''}">` +
           `${abilityIcon(x.id)}<b>${ABILITY_TEXT[x.id].name}</b>${badge}</button>`
         );
       })
@@ -888,8 +959,11 @@ export function startApp(app: HTMLElement): void {
     if (t.id === 'wetFloor') return t.uses.filter((u) => t.picked.every((c) => LINES[lineThrough(u.cells![0], u.cells![1])].includes(c)));
     return t.uses.filter((u) => t.picked.every((c, k) => u.cells![k] === c));
   }
+  /** Simple rules: Shove and Swap take one tap on the enemy mark; the rest is picked for you. */
+  const oneTap = (t: NonNullable<typeof targeting>) => !!match?.agents?.simple && (t.id === 'shove' || t.id === 'swap');
   function candidates(t: NonNullable<typeof targeting>): number[] {
     const us = consistent(t);
+    if (oneTap(t)) return [...new Set(us.map((u) => (t.id === 'swap' ? u.cells![1] : u.cells![0])))];
     if (t.id === 'wetFloor') return [...new Set(us.flatMap((u) => [...LINES[lineThrough(u.cells![0], u.cells![1])]]))].filter((c) => !t.picked.includes(c));
     return [...new Set(us.map((u) => u.cells![t.picked.length]).filter((c) => c !== undefined))];
   }
@@ -917,9 +991,12 @@ export function startApp(app: HTMLElement): void {
       hint(id === 'flip' ? 'Flip: swipe the first layer' : `${name}: swipe a layer to turn it`);
     } else {
       board.highlight(candidates(targeting), color);
+      const one = !!match.agents.simple;
       const what: Partial<Record<AbilityId, string>> = {
-        shove: 'tap an enemy mark, then where it goes',
-        swap: 'tap your mark, then the enemy mark next to it',
+        shove: one ? 'tap an enemy mark to push it' : 'tap an enemy mark, then where it goes',
+        swap: one ? 'tap an enemy mark next to one of yours' : 'tap your mark, then the enemy mark next to it',
+        relocate: 'tap your mark, then an empty cell next to it',
+        shield: 'tap your mark to shield it',
         wetFloor: 'tap cells of the line to block',
         fixative: 'tap your mark to seal',
         overspray: 'tap an enemy mark',
@@ -938,6 +1015,11 @@ export function startApp(app: HTMLElement): void {
     if (!cand.includes(c)) {
       board?.refuse(cell);
       toast('Pick a glowing cell.');
+      return;
+    }
+    if (oneTap(t)) {
+      const pick = t.uses.find((u) => (t.id === 'swap' ? u.cells![1] : u.cells![0]) === c);
+      if (pick) void doAbility(pick);
       return;
     }
     t.picked.push(c);
@@ -982,6 +1064,7 @@ export function startApp(app: HTMLElement): void {
     persist();
     renderAbilities();
     if (isUlt(use.id)) splash(agent, ABILITY_TEXT[use.id].name.toUpperCase(), COLORS[p]);
+    board.ages(null);
     await board.play(out.events);
     busy = false;
     board.decorate(decorOf(match.round, match.agents!));
@@ -1028,6 +1111,7 @@ export function startApp(app: HTMLElement): void {
     } else away?.remove();
     if (match.agents) renderAbilities();
     wetNote();
+    board?.ages(busy ? null : agesOf(match));
     if (board) {
       board.twistEnabled = (r.mode === 'rotating' || (targeting?.uses[0].twists?.length ?? 0) > 0) && !r.result && !busy && !awaiting && isMyTurn();
       board.setTurn(r.result || busy || !isMyTurn() ? null : r.turn);
@@ -1104,8 +1188,9 @@ export function startApp(app: HTMLElement): void {
 
   // ---- vs PC: the PC is player 2 and plays its turn by itself ----
   const PC_OPTS: Record<PcLevel, { noise: number; samples: number; ultChance: number }> = {
-    easy: { noise: 1.6, samples: 3, ultChance: 0.3 },
-    normal: { noise: 0.45, samples: 6, ultChance: 0.15 },
+    // Easy is close to random; Normal makes real mistakes; Hard plays its best.
+    easy: { noise: 3, samples: 2, ultChance: 0.3 },
+    normal: { noise: 1.1, samples: 4, ultChance: 0.2 },
     hard: { noise: 0.08, samples: 10, ultChance: 0.1 },
   };
   function maybePc(): void {
@@ -1149,6 +1234,7 @@ export function startApp(app: HTMLElement): void {
       match = out.state;
       persist();
       renderAbilities();
+      board.ages(null);
       await board.play(out.events);
       if (match.agents) board.decorate(decorOf(match.round, match.agents));
       if (match.round.result) break;
@@ -1160,6 +1246,12 @@ export function startApp(app: HTMLElement): void {
     updateHud();
     if (match.round.result) roundOver();
   }
+
+  /** Twist: each player's marks numbered by age (1 = oldest, the next to fade). */
+  const agesOf = (m: MatchState | null) =>
+    m && m.round.mode === 'rotating' && !m.round.result
+      ? ([0, 1] as const).flatMap((p) => (m.round as { marks: number[][] }).marks[p].map((cell, i) => ({ cell, n: i + 1, p })))
+      : null;
 
   /** Marks that fade on their owner's next placement (shown cracked). */
   const crackingOf = (m: MatchState): number[] =>
@@ -1294,6 +1386,7 @@ export function startApp(app: HTMLElement): void {
     persist();
     const turnEl = ui.querySelector('.turn') as HTMLElement | null;
     if (turnEl) turnEl.textContent = '';
+    board.ages(null);
     await board.play(out.events);
     busy = false;
     if (match.agents) board.decorate(decorOf(match.round, match.agents));
@@ -1333,7 +1426,7 @@ export function startApp(app: HTMLElement): void {
       overlay.remove();
       updateHud();
     });
-    overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode, match!.agents?.picks));
+    overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode, match!.agents?.picks, !!match!.agents?.simple));
     overlay.querySelector('[data-go="home"]')?.addEventListener('click', homeScreen);
   }
 

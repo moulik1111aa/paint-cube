@@ -4,6 +4,7 @@
 
 import type { AbilityId, AgentId } from '../core/agents.ts';
 import type { Mode } from '../core/match.ts';
+import { playerCss } from '../theme.ts';
 
 export const AGENT_LOOK: Record<AgentId, { accent: string; deep: string; light: string }> = {
   blitz: { accent: '#ff3d6e', deep: '#7a0f2e', light: '#ffc2d2' },
@@ -36,10 +37,30 @@ export const ABILITY_TEXT: Record<AbilityId, AbilityText> = {
   afterimage: { name: 'Afterimage', short: 'Bring a mark back', rotating: 'Bring back your most recently lost mark to its old cell, if it’s empty (wet).', cascade: 'Bring back your most recently lost cube: it drops into its old column (wet).' },
   delay: { name: 'Delay', short: 'Their next mark is wet', rotating: 'Your opponent’s next mark is wet: it can’t complete a line straight away.', cascade: 'Your opponent’s next cube is wet: its lines wait to burst.' },
   reverb: { name: 'Reverb', short: 'Mirror your move', rotating: 'After your move, paint the cell straight through the Core from your mark (wet).', cascade: 'After your drop, a second cube drops into the mirrored column (wet).' },
+  shield: { name: 'Shield', short: 'Protect your mark', rotating: 'Tap one of your marks: for 3 turns it can’t fade, and no power can move or wipe it.', cascade: 'Tap one of your cubes: for 3 turns no power can move or wipe it, and when its line bursts it stays.' },
+  relocate: { name: 'Relocate', short: 'Move your mark', rotating: 'Slide one of your marks into an empty cell next to it.', cascade: 'Pick up one of your top cubes and drop it on another column.' },
+  freeze: { name: 'Freeze', short: 'No powers for them', rotating: 'Your opponent can’t use a power or their ultimate on their next turn.', cascade: 'Your opponent can’t use a power or their ultimate on their next turn.' },
   rewind: { name: 'Rewind', short: 'Undo their turn', rotating: 'ULTIMATE. Undo your opponent’s whole last turn (move and power), then take your turn. Your move after it is wet.', cascade: 'ULTIMATE. Undo your opponent’s whole last turn, scoring and all, then take your turn.' },
 };
 
-export const abilityText = (id: AbilityId, mode: Mode): string => ABILITY_TEXT[id][mode];
+/** Simple rules: the same powers in plain words (no wet paint). */
+const SIMPLE_TEXT: Partial<Record<AbilityId, { rotating: string; cascade: string }>> = {
+  doubleTap: { rotating: 'Paint an extra empty cell, then make your normal move.', cascade: 'Drop an extra cube, then make your normal drop.' },
+  shove: { rotating: 'Tap an enemy mark: it’s pushed into an empty cell next to it.', cascade: 'Tap an enemy top cube: it’s pushed onto a column next to it.' },
+  overspray: { rotating: 'Tap an enemy mark to wipe it off the cube.', cascade: 'Tap an enemy cube to wipe it. Cubes above it fall.' },
+  chrome: { rotating: 'ULTIMATE. Your next 2 marks are chrome: they never fade, and no power can move or wipe them.', cascade: 'ULTIMATE. Your next cube is chrome: a line with it scores double.' },
+  tape: { rotating: 'Tape an empty cell: nobody can paint there for 3 turns.', cascade: 'Tape a column: nobody can drop there for 3 turns.' },
+  lockdown: { rotating: 'ULTIMATE. For 2 turns your opponent can’t use powers or twist.', cascade: 'ULTIMATE. For 2 turns your opponent can’t use powers, and their lines wait to burst.' },
+  spin: { rotating: 'Swipe a layer for an extra twist, then make your normal move.', cascade: 'Twist a layer of the stack and everything falls. Then your normal drop.' },
+  swap: { rotating: 'Tap an enemy mark next to one of yours: they trade places.', cascade: 'Tap an enemy cube next to one of yours: they trade places.' },
+  trap: { rotating: 'Mark an empty cell. If your opponent paints it, it turns into yours.', cascade: 'Mark an empty cell. If your opponent’s paint lands there, it turns into yours.' },
+  flip: { rotating: 'ULTIMATE. Twist any two layers at once, ignoring the twist rules.', cascade: 'ULTIMATE. The cube flips upside down; everything falls and lines score as usual.' },
+  afterimage: { rotating: 'Bring back your last lost mark, if its cell is empty.', cascade: 'Bring back your last lost cube into its old column.' },
+  reverb: { rotating: 'After your move, the cell straight through the Core gets your paint too.', cascade: 'After your drop, the mirrored column gets a cube too.' },
+  rewind: { rotating: 'ULTIMATE. Undo your opponent’s whole last turn, then take yours.', cascade: 'ULTIMATE. Undo your opponent’s whole last turn, scoring and all, then take yours.' },
+};
+
+export const abilityText = (id: AbilityId, mode: Mode, simple = false): string => (simple && SIMPLE_TEXT[id]?.[mode]) || ABILITY_TEXT[id][mode];
 
 /** Small line icons (stroke = currentColor). */
 const ICON_PATHS: Record<AbilityId, string> = {
@@ -59,6 +80,9 @@ const ICON_PATHS: Record<AbilityId, string> = {
   delay: '<path d="M7 3h10M7 21h10M8 3c0 5 8 5 8 9s-8 4-8 9M16 3c0 5-8 5-8 9"/>',
   reverb: '<circle cx="12" cy="12" r="2"/><path d="M7 7a7 7 0 0 0 0 10M17 7a7 7 0 0 1 0 10M4 4a11 11 0 0 0 0 16M20 4a11 11 0 0 1 0 16"/>',
   rewind: '<path d="M11 6l-7 6 7 6zM20 6l-7 6 7 6z"/>',
+  shield: '<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6z"/>',
+  relocate: '<rect x="3" y="13" width="8" height="8" rx="2" opacity=".45"/><rect x="13" y="3" width="8" height="8" rx="2"/><path d="M7 11V7h4M9 5l2 2-2 2"/>',
+  freeze: '<path d="M12 2v20M3.3 7l17.4 10M20.7 7L3.3 17M9 4l3 2 3-2M9 20l3-2 3 2"/>',
 };
 export const abilityIcon = (id: AbilityId): string =>
   `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[id]}</svg>`;
@@ -506,6 +530,19 @@ const PREVIEWS: Record<AbilityId, Frame[]> = {
     { cells: [0, null, null, null, 1, null, null, null, null], label: 'move' },
     { cells: [0, null, null, null, 1, null, null, null, 0], wet: [8], label: 'REVERB' },
   ],
+  shield: [
+    { cells: [0, null, null, null, 1, null, null, null, null] },
+    { cells: [0, null, null, null, 1, null, null, null, null], seal: [0], label: 'SHIELD' },
+    { cells: [0, null, null, null, 1, null, null, null, null], seal: [0], label: 'can’t be wiped' },
+  ],
+  relocate: [
+    { cells: [0, 1, null, null, null, null, null, null, null] },
+    { cells: [null, 1, null, null, null, null, 0, null, null], ghost: [0], label: 'RELOCATE' },
+  ],
+  freeze: [
+    { cells: [0, null, null, null, 1, null, null, null, null] },
+    { cells: [0, null, null, null, 1, null, null, null, null], lock: true, label: 'FREEZE: no powers' },
+  ],
   rewind: [
     { cells: [0, 0, null, null, 1, null, null, null, null] },
     { cells: [0, 0, 1, null, 1, null, null, null, null], label: 'their move' },
@@ -513,10 +550,11 @@ const PREVIEWS: Record<AbilityId, Frame[]> = {
   ],
 };
 
-const P_COLORS = ['#ff7a1a', '#1aa3ff'];
+
 
 /** Play a power's preview on `c` in a loop; returns a stop function. */
 export function playPreview(c: HTMLCanvasElement, id: AbilityId, manual = false): () => void {
+  const P_COLORS = playerCss();
   const g = c.getContext('2d')!;
   const frames = PREVIEWS[id];
   const W = c.width;

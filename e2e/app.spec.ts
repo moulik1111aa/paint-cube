@@ -181,12 +181,12 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   expect(errors).toEqual([]);
 });
 
-test('agents: toggle on, both players lock in, a targeted power, cooldown, the ultimate charges and fires', async ({ page }) => {
+test('agents (Pro abilities): toggle on, both players lock in, a targeted power, cooldown, the ultimate charges and fires', async ({ page }) => {
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'], pro: true })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
@@ -381,5 +381,40 @@ test('trial: try a writer against an easy PC with every power ready each turn; w
   // Trial matches aren't saved.
   await page.click('.back');
   await expect(page.locator('[data-go="resume"]')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('Simple abilities (default): once per round, no finishing your own row on a power turn, age numbers', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'], agents: true, picks: ['blitz', 'stencil'] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="local"]');
+  await expect(page.locator('[data-pro]')).not.toHaveClass(/on/);
+  await page.click('[data-go="start"]');
+  await page.click('[data-go="lock"]'); // Moulik: BLITZ
+  await page.click('[data-go="ready"]');
+  await page.click('[data-go="lock"]'); // Riya: STENCIL
+  await expect(page.locator('.abilities .ab')).toHaveCount(4);
+  expect(await page.evaluate(() => window.__game!.state()!.agents!.simple)).toBe(true);
+  await expect(page.locator('.tagbox.p2 .agent')).toContainText('STENCIL');
+  // Moulik: 0, Riya: 9, Moulik: 1, Riya: 10. Now Moulik could finish 0-1-2...
+  for (const c of [0, 9, 1, 10]) await tap(page, c);
+  // ...but after a power (Overspray on 9) the row can't be finished this turn.
+  await page.click('.ab[data-ab="overspray"]');
+  await tap(page, 9);
+  await tap(page, 2);
+  await expect(page.locator('.toast')).toContainText('Power turn');
+  expect(await page.evaluate(() => window.__game!.state()!.round.cells[2])).toBeNull();
+  await expect(page.locator('.ab[data-ab="overspray"] .cd.done')).toHaveCount(1);
+  await tap(page, 20);
+  expect(await page.evaluate(() => window.__game!.state()!.round.result)).toBeNull();
+  // Stencil has the Simple powers.
+  await expect(page.locator('.ab[data-ab="shield"]')).toHaveCount(1);
+  await expect(page.locator('.ab[data-ab="relocate"]')).toHaveCount(1);
   expect(errors).toEqual([]);
 });

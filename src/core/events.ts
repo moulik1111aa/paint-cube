@@ -40,7 +40,7 @@ export type GameEvent =
   /** A player's wet paint dried at the start of their turn. */
   | { type: 'dried'; player: Player; cells: number[] }
   /** A timed effect ran out. */
-  | { type: 'effectEnded'; kind: 'tape' | 'trap' | 'seal' | 'floor' | 'lockdown'; cell?: number; line?: number }
+  | { type: 'effectEnded'; kind: 'tape' | 'trap' | 'seal' | 'floor' | 'lockdown' | 'freeze'; cell?: number; line?: number }
   /** Reverb had nowhere to paint. */
   | { type: 'fizzled'; id: AbilityId; player: Player }
   /** Rewind: the board jumps back to these cells. */
@@ -73,7 +73,11 @@ export type IllegalReason =
   | 'no-target'
   | 'bad-target'
   | 'must-move'
-  | 'no-agents';
+  | 'no-agents'
+  /** Simple rules: on a turn you used a power you can't finish a line of your own. */
+  | 'power-turn'
+  /** Freeze: no powers this turn. */
+  | 'frozen';
 
 export class IllegalMove extends Error {
   readonly reason: IllegalReason;

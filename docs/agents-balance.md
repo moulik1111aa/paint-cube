@@ -29,6 +29,29 @@ ultimate when it makes or blocks a threat (or 15% of the time anyway).
   winner's turn, the winner's previous turn);
 - every agent beats the no-powers bot, but not overwhelmingly: 50-80% of matches.
 
+## Build 21: Simple abilities (the new default)
+
+Playtesting said the powers were hard to follow: wet paint above all, too many things to
+remember. Agents now default to **Simple** rules; the original set is **Pro** (a switch
+at match setup), unchanged.
+
+- No wet paint. One rule instead: **on a turn you use a power, you can't finish a line of
+  your own** (illegal moves and power targets are refused with a reason; Cascade: no
+  scoring line of your own on that turn).
+- Every power once per round (`ONCE`), ready from the first turn in Twist.
+- Ultimates: in Twist all four are ready after 6 of your turns; in Cascade they differ.
+- Stencil: Tape, **Shield** (a mark can't fade, be moved or wiped for 2 turns; in Cascade
+  it stays when its line bursts), **Relocate** (slide one of your marks next door).
+  Echo: Afterimage, **Freeze** (no powers for the other player's next turn), Reverb.
+  Shove and Swap take one tap.
+
+Tuning (`SIMPLE_TUNING`): Twist Tape and Shield 2 turns, Paint Trap 5, Lockdown 1 turn. Cascade was
+a race decided by Blitz's and Echo's extra cubes and wipes from turn one, so there Double
+Tap / Overspray / Shove wake up at turns 15 / 16 / 13, Afterimage and Reverb at 14, Spin
+at 4; Chrome needs 26 turns, Rewind 24, Lockdown and Flip 8. Freeze (no powers for the
+other player's next turn) is valued by the bot mostly when their ultimate is ready. The balance test runs a
+72-match-per-pairing Simple sweep for both modes alongside the full Pro sweep.
+
 ## Build 20: cheaper ultimates that can't win on the spot
 
 Rewind (24 pips) and Flip (36) were only ready about once a match in Twist: at 7 pips

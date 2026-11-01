@@ -4,7 +4,9 @@
 // Taps on cells are reported back through `onTap`.
 
 import { makeRenderer, RenderLoop, softEnv, disposeAll, type Three } from './three.ts';
-import { makeMaterials, roundedBox, crackTexture, glowTexture, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
+import { makeMaterials, roundedBox, crackTexture, glowTexture, applyThemeColors, PLAYER_COLORS, CORE_COLOR, type Materials } from './look.ts';
+import { pageTexture, gridTexture } from './notebook.ts';
+import { theme } from '../theme.ts';
 import { wallTexture, groundTexture, graffitiCaption, wallTagTexture } from './street.ts';
 import { Fx, Tweens, Clock, Shake, ease } from './fx3d.ts';
 import type { Sfx } from '../audio/sfx.ts';
@@ -52,6 +54,8 @@ export interface Board {
   decorate(d: Decor | null): void;
   /** Agents mode: pulse these cells as targets (null clears). */
   highlight(cells: readonly number[] | null, color?: string): void;
+  /** Twist: small age numbers on marks (1 = oldest, fades next); null hides them. */
+  ages(list: readonly { cell: number; n: number; p: Player }[] | null): void;
   /** Agents mode: a caption for an ability (its display name). */
   abilityName: ((id: AbilityId) => string) | null;
   /** Manual clock (tests): advance game time and optionally draw. */
@@ -88,9 +92,11 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const tweens = new Tweens();
   const shake = new Shake();
 
+  applyThemeColors();
+  const notebook = theme() === 'notebook';
   const world = new T.Scene();
-  world.background = new T.Color('#0b0816');
-  const env = softEnv(T, r, '#9a8cff', '#0a0912');
+  world.background = new T.Color(notebook ? '#f2efe6' : '#0b0816');
+  const env = notebook ? softEnv(T, r, '#ffffff', '#d8d2c0') : softEnv(T, r, '#9a8cff', '#0a0912');
   const M: Materials = makeMaterials(T, env);
   // Sharper textures on faces seen at an angle.
   for (const m of Object.values(M).flat() as any[]) for (const k of ['map', 'bumpMap', 'roughnessMap']) if (m?.[k]) m[k].anisotropy = aniso;
@@ -101,8 +107,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   camera.layers.enable(2);
   camera.layers.enable(3);
 
-  world.add(new T.HemisphereLight('#7c6cff', '#1a1020', 1.1));
-  const lamp = new T.SpotLight('#ffd29a', 3.4, 0, 0.62, 0.75, 0);
+  world.add(notebook ? new T.HemisphereLight('#ffffff', '#cfc6b0', 1.9) : new T.HemisphereLight('#7c6cff', '#1a1020', 1.1));
+  const lamp = new T.SpotLight(notebook ? '#fff6e6' : '#ffd29a', notebook ? 2.2 : 3.4, 0, 0.62, 0.75, 0);
   lamp.position.set(-4.5, 8, 7);
   lamp.target.position.set(0.5, -1, -2);
   lamp.castShadow = true;
@@ -110,16 +116,16 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   lamp.shadow.bias = -0.0006;
   lamp.shadow.radius = 4;
   world.add(lamp, lamp.target);
-  const rim = new T.DirectionalLight('#ff4fa3', 1.4);
+  const rim = new T.DirectionalLight(notebook ? '#ffffff' : '#ff4fa3', notebook ? 0.5 : 1.4);
   rim.position.set(5, 3, -4);
   world.add(rim);
-  const fill = new T.DirectionalLight('#38d6ff', 0.6);
+  const fill = new T.DirectionalLight(notebook ? '#e8eeff' : '#38d6ff', notebook ? 0.5 : 0.6);
   fill.position.set(-4, -2, 5);
   world.add(fill);
 
-  const wallTex = wallTexture(T);
+  const wallTex = notebook ? pageTexture(T) : wallTexture(T);
   wallTex.anisotropy = aniso;
-  const groundTex = groundTexture(T);
+  const groundTex = notebook ? gridTexture(T) : groundTexture(T);
   groundTex.anisotropy = aniso;
   const wall = new T.Mesh(new T.PlaneGeometry(12, 18), new T.MeshStandardMaterial({ map: wallTex, roughness: 0.95 }));
   wall.position.set(0, 3, -5);
@@ -149,7 +155,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const towardCamera = (pos: any) => camera.position.clone().sub(pos).normalize();
 
   // Casings: solid concrete blocks (rotating) or faint glass slots (stacking).
-  const casingGeo = roundedBox(T, CELL, 0.14, 4);
+  // Notebook: crisp, sharp-edged paper blocks; Street: rounded concrete.
+  const casingGeo = notebook ? new T.BoxGeometry(CELL, CELL, CELL) : roundedBox(T, CELL, 0.14, 4);
   const glass = new T.MeshStandardMaterial({ color: '#cfc8ff', transparent: true, opacity: 0.13, roughness: 0.2, depthWrite: false });
   const casings: any[] = [];
   const noRay = () => {};
@@ -161,7 +168,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     m.userData.cell = i;
     // Ink outline: a slightly bigger back-facing shell, drawn crisp by the rasterizer.
     const hull = new T.Mesh(casingGeo, M.ink);
-    hull.scale.setScalar(1.075);
+    hull.scale.setScalar(notebook ? 1.035 : 1.075);
     hull.raycast = noRay;
     hull.userData.hull = true;
     m.add(hull);
@@ -180,17 +187,18 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const coreGlow = new T.Sprite(glowMat);
   coreGlow.scale.setScalar(1.25);
   coreGlow.layers.set(1);
+  coreGlow.visible = !notebook; // an additive glow vanishes on white paper
   core.add(coreGlow);
   const coreLight = new T.PointLight(CORE_COLOR, 7, 3.2, 1.6);
   cube.add(coreLight);
 
-  const shellGeo = roundedBox(T, 0.86, 0.22, 5);
+  const shellGeo = notebook ? new T.BoxGeometry(0.82, 0.82, 0.82) : roundedBox(T, 0.86, 0.22, 5);
   const dripGeo = new T.SphereGeometry(1, 14, 10);
   const dripRod = new T.CylinderGeometry(1, 1, 1, 8, 1);
   dripRod.translate(0, -0.5, 0);
   const coreTarget = new T.Color(CORE_COLOR);
   const coreGold = new T.Color(CORE_COLOR);
-  const crackMat = new T.MeshBasicMaterial({ map: crackTexture(T), transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  const crackMat = new T.MeshBasicMaterial({ map: crackTexture(T), transparent: true, opacity: notebook ? 0.45 : 1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
   let shells: (any | null)[] = Array(CELLS).fill(null);
   let owners: (Player | null)[] = Array(CELLS).fill(null);
   let mode: Mode = 'rotating';
@@ -208,13 +216,13 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     body.receiveShadow = true;
     body.userData.body = true;
     const hull = new T.Mesh(shellGeo, M.ink);
-    hull.scale.setScalar(1.1);
+    hull.scale.setScalar(notebook ? 1.035 : 1.1);
     hull.raycast = noRay;
     inner.add(hull, body);
     let s = seed * 7919 + 13;
     const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
     const dirs = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < (notebook ? 0 : 3); k++) {
       const d = dirs[Math.floor(rnd() * 6)];
       const pos = new T.Vector3(d[0], d[1], d[2]).multiplyScalar(0.44);
       const free = [0, 1, 2].filter((a) => d[a] === 0);
@@ -239,6 +247,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   function addDrips(shell: any, cell: number, p: Player): void {
+    if (notebook) return; // pen doodles don't drip
     cube.updateMatrixWorld();
     const centre = slot(cell);
     const toCam = cube.worldToLocal(camera.position.clone()).sub(centre).normalize();
@@ -405,13 +414,19 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   const anim = (dur: number, step: (k: number) => void, delay = 0) => new Promise<void>((res) => tweens.add(dur, step, res, delay));
   const wait = (sec: number) => new Promise<void>((res) => tweens.wait(sec, res));
 
+  /** Bumped by sync(): animations started before it must not paint the new board. */
+  let epoch = 0;
+
   function placeShell(cell: number, p: Player, popIn: boolean): any {
     const shell = makeShell(p, cell * 31 + Math.floor(Math.random() * 1000));
     shell.position.copy(slot(cell));
     cube.add(shell);
     shells[cell] = shell;
     owners[cell] = p;
-    if (popIn) {
+    if (popIn && notebook) {
+      shell.scale.setScalar(0.9);
+      void anim(0.22, (k) => shell.scale.setScalar(0.9 + 0.1 * ease.outCubic(k)));
+    } else if (popIn) {
       shell.scale.setScalar(0.2);
       addDrips(shell, cell, p);
       void anim(0.5, (k) => shell.scale.setScalar(0.2 + 0.8 * ease.outElastic(k)));
@@ -430,6 +445,14 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const color = PLAYER_COLORS[p];
     const target = toWorld(cell);
     const n = towardCamera(target);
+    if (notebook) {
+      // A pen tap: a few ink flecks, no splash.
+      hit({ freeze: 0.03, shake: 0.12 });
+      sfx.splat(1.3 + Math.random() * 0.2);
+      haptics.tap();
+      fx.burst(target.clone().addScaledVector(n, 0.5), color, 6, 1.6, 0.025, n, 0.9);
+      return;
+    }
     hit({ freeze: 0.06, shake: 0.32, bloom: 0.9, aberr: 0.006 });
     sfx.splat(0.9 + Math.random() * 0.2);
     haptics.tap();
@@ -441,24 +464,52 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   /** A paintball thrown from the player's side of the screen onto the cell. */
   async function throwPaint(cell: number, p: Player): Promise<void> {
+    if (notebook) return drawDoodle(cell, p);
     const target = toWorld(cell);
     const start = camera.position.clone().add(new T.Vector3(p === 0 ? -1.4 : 1.4, -1.8, -1.2));
     const mid = start.clone().lerp(target, 0.5).add(new T.Vector3(0, 1.3, 0));
+    const e0 = epoch;
     await flyBall(p, (k) => {
       const a = start.clone().lerp(mid, k);
       return a.lerp(mid.clone().lerp(target, k), k);
     }, 0.26);
+    if (e0 !== epoch) return;
     impact(cell, p);
     placeShell(cell, p, true);
     await wait(0.35);
   }
 
   /** A paintball dropped down a column onto its landing cell. */
+  /** Notebook: the doodle is drawn onto the block, no paintball. */
+  async function drawDoodle(cell: number, p: Player): Promise<void> {
+    const e0 = epoch;
+    await wait(0.05);
+    if (e0 !== epoch) return;
+    impact(cell, p);
+    placeShell(cell, p, true);
+    await wait(0.3);
+  }
+
   async function dropPaint(cell: number, p: Player): Promise<void> {
+    if (notebook) {
+      // A block slides down the column instead of a falling paintball.
+      const e0 = epoch;
+      await wait(0.05);
+      if (e0 !== epoch) return;
+      const s = placeShell(cell, p, false);
+      const end = s.position.clone();
+      s.position.y += 1.6;
+      await anim(0.28, (k) => (s.position.y = end.y + 1.6 * (1 - ease.inCubic(k))));
+      impact(cell, p);
+      await wait(0.2);
+      return;
+    }
     cube.updateMatrixWorld();
     const top = cube.localToWorld(slot(cell).setY(2.6));
     const target = toWorld(cell);
+    const e0 = epoch;
     await flyBall(p, (k) => top.clone().lerp(target, ease.inCubic(k)), 0.3);
+    if (e0 !== epoch) return;
     impact(cell, p);
     placeShell(cell, p, true);
     await wait(0.3);
@@ -665,7 +716,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     (s.userData.inner ?? s).add(overlay);
     void anim(0.3, (k) => (overlay.scale.setScalar(0.9 + 0.112 * ease.outBack(k))));
     const dry = M.paint[p].clone();
-    dry.color.set('#9d97a6');
+    // Street: the paint dries grey. Notebook: the ink just goes pale (fading pencil-grey).
+    dry.color.set(notebook ? '#d9d6ce' : '#9d97a6');
     bodiesOf(s).forEach((m: any) => (m.material = dry));
     s.userData.dry = dry;
   }
@@ -760,7 +812,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   async function play(events: readonly GameEvent[]): Promise<void> {
+    const e0 = epoch;
     for (let i = 0; i < events.length; i++) {
+      // A sync() (new match, resume, lesson) replaced the board: drop the rest.
+      if (e0 !== epoch) return;
       const e = events[i];
       switch (e.type) {
         case 'faded':
@@ -1147,6 +1202,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   function sync(cells: readonly Cell[], cracking: readonly number[] = []): void {
+    epoch++;
     clearTag();
     showAim(null);
     for (let i = 0; i < CELLS; i++) {
@@ -1357,7 +1413,63 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   host.addEventListener('pointercancel', onCancel);
 
   let shakeOff: [number, number, number] = [0, 0, 0];
+  // Age badges: a numbered disc in front of each mark, facing the camera.
+  const badgeTex = new Map<string, any>();
+  const badgeOf = (n: number, p: Player) => {
+    const key = `${n}${p}`;
+    if (!badgeTex.has(key)) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d')!;
+      g.beginPath();
+      g.arc(64, 64, 52, 0, Math.PI * 2);
+      g.fillStyle = '#ffffff';
+      g.fill();
+      g.lineWidth = 12;
+      g.strokeStyle = PLAYER_COLORS[p];
+      g.stroke();
+      g.fillStyle = '#0b0b12';
+      g.font = '900 72px "Inter Display", system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(String(n), 64, 70);
+      const t = new T.CanvasTexture(c);
+      t.colorSpace = T.SRGBColorSpace;
+      badgeTex.set(key, t);
+    }
+    return badgeTex.get(key);
+  };
+  const badges = new Map<number, any>();
+  function ages(list: readonly { cell: number; n: number; p: Player }[] | null): void {
+    for (const b of badges.values()) {
+      world.remove(b);
+      b.material.dispose();
+    }
+    badges.clear();
+    for (const a of list ?? []) {
+      const b = new T.Sprite(new T.SpriteMaterial({ map: badgeOf(a.n, a.p), transparent: true, depthWrite: false }));
+      b.scale.setScalar(0.26);
+      b.layers.set(1);
+      b.renderOrder = 5;
+      b.userData.cell = a.cell;
+      world.add(b);
+      badges.set(a.cell, b);
+    }
+  }
+  const badgePos = new T.Vector3();
+  function placeBadges(): void {
+    for (const [cell, b] of badges) {
+      const sh = shells[cell];
+      b.visible = !!sh;
+      if (!sh) continue;
+      sh.getWorldPosition(badgePos);
+      // Out past the block's nearest corner (the camera looks at the cube from an angle).
+      b.position.copy(badgePos).addScaledVector(towardCamera(badgePos), 0.8);
+    }
+  }
+
   function update(real: number): void {
+    if (badges.size) placeBadges();
     const dt = clock.advance(real);
     tweens.update(dt);
     fx.update(dt);
@@ -1546,6 +1658,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     aim: (c) => showAim(c),
     decorate,
     highlight,
+    ages,
     abilityName: null,
     names: ['P1', 'P2'],
     setTurn(p) {

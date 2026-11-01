@@ -34,10 +34,10 @@ export interface MatchState {
 
 const freshRound = (mode: Mode, starter: Player): Round => (mode === 'rotating' ? newRotating(starter) : newCascade(starter));
 
-/** A new match; pass `picks` for Agents mode. */
-export function newMatch(mode: Mode, starter: Player = 0, picks?: [AgentId, AgentId]): MatchState {
+/** A new match; pass `picks` for Agents mode (`simple` for the Simple rules). */
+export function newMatch(mode: Mode, starter: Player = 0, picks?: [AgentId, AgentId], simple = false): MatchState {
   const m: MatchState = { mode, round: freshRound(mode, starter), roundNumber: 1, starter, wins: [0, 0], winner: null };
-  if (picks) m.agents = resetAgentsForRound(newAgents(picks), m.round);
+  if (picks) m.agents = resetAgentsForRound(newAgents(picks, simple), m.round);
   return m;
 }
 
@@ -73,7 +73,7 @@ export function applyMove(m: MatchState, move: Move): { state: MatchState; event
     // Losing a Twist round charges the ultimate (Cascade charges per line scored against you).
     const res = out.round.result;
     if (res && res.winner !== null && out.round.mode === 'rotating') {
-      const t = tuning('rotating');
+      const t = tuning('rotating', state.agents!.simple);
       const o = other(res.winner);
       state.agents!.ult[o] = Math.min(ultCostOf(t, state.agents!.picks[o]), state.agents!.ult[o] + t.ultBonus);
     }

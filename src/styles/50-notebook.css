@@ -1,0 +1,94 @@
+/* Notebook look: white paper, blue ballpoint, a red pen for player 2, kintsugi gold.
+   Buttons are paper cards drawn in blue ink; no dark outlines or glows. */
+:root[data-theme='notebook'] {
+  --bg: #f2efe6;
+  --ink: #1c2f86;
+  --ink-quiet: #5d6a9c;
+  --p1: #2350d8;
+  --p2: #d63b33;
+  --accent: #ffffff;
+  --line: #1c2f86;
+  color: var(--ink);
+}
+[data-theme='notebook'] body { background: var(--bg); }
+[data-theme='notebook'] .game .stage .vig { background: radial-gradient(ellipse 90% 75% at 50% 45%, transparent 60%, rgba(120, 100, 60, 0.18) 100%); }
+[data-theme='notebook'] .game .stage .flash { mix-blend-mode: normal; background: radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0) 65%); }
+
+/* Text on the page: ink, no drop shadows. */
+[data-theme='notebook'] .hello,
+[data-theme='notebook'] .link,
+[data-theme='notebook'] .build,
+[data-theme='notebook'] .round,
+[data-theme='notebook'] .vs,
+[data-theme='notebook'] .note { color: var(--ink); text-shadow: none; }
+[data-theme='notebook'] .tag { -webkit-text-stroke: 0; color: var(--ink); text-shadow: 2px 2px 0 rgba(35, 80, 216, 0.15); }
+[data-theme='notebook'] .tag.p1 { color: var(--p1); }
+[data-theme='notebook'] .tag.p2 { color: var(--p2); }
+[data-theme='notebook'] .logo span { -webkit-text-stroke: 2px var(--line); color: #fff; }
+[data-theme='notebook'] .logo .p1 { color: #fff; text-shadow: 3px 3px 0 var(--p1); }
+[data-theme='notebook'] .logo .p2 { color: #fff; text-shadow: 3px 3px 0 var(--p2); }
+
+/* Paper cards drawn in ink. */
+[data-theme='notebook'] .btn,
+[data-theme='notebook'] .mode,
+[data-theme='notebook'] .toggle,
+[data-theme='notebook'] .level,
+[data-theme='notebook'] .card,
+[data-theme='notebook'] .back,
+[data-theme='notebook'] .ask,
+[data-theme='notebook'] .powersbtn,
+[data-theme='notebook'] .ab,
+[data-theme='notebook'] .hint,
+[data-theme='notebook'] .toast,
+[data-theme='notebook'] .tagbox,
+[data-theme='notebook'] .turn,
+[data-theme='notebook'] .chip,
+[data-theme='notebook'] .card input {
+  border-color: var(--line);
+  box-shadow: 2px 3px 0 rgba(28, 47, 134, 0.85);
+  color: var(--ink);
+}
+[data-theme='notebook'] .btn { background: #fff; }
+[data-theme='notebook'] .btn.alt { background: #eef2fb; }
+[data-theme='notebook'] .btn.big:first-of-type,
+[data-theme='notebook'] .btn.lockin,
+[data-theme='notebook'] .lesson .btn,
+[data-theme='notebook'] .help .btn[data-next] { background: var(--p1); color: #fff; }
+[data-theme='notebook'] .btn.resume { background: #fff3d6; }
+[data-theme='notebook'] .mode { background: #fff; }
+[data-theme='notebook'] .mode.on { background: #eaf0ff; outline-color: var(--p1); }
+[data-theme='notebook'] .toggle { background: #fff; color: var(--ink); }
+[data-theme='notebook'] .toggle.on { background: #eaf0ff; }
+[data-theme='notebook'] .toggle.small.on { background: #fff3d6; }
+[data-theme='notebook'] .toggle .knob { border-color: var(--line); }
+[data-theme='notebook'] .level { background: #fff; }
+[data-theme='notebook'] .level.on { background: var(--p1); color: #fff; outline-color: var(--p1); }
+[data-theme='notebook'] .chip.p1, [data-theme='notebook'] .tagbox.p1, [data-theme='notebook'] .turn.p1 { background: #e3eaff; }
+[data-theme='notebook'] .chip.p2, [data-theme='notebook'] .tagbox.p2, [data-theme='notebook'] .turn.p2 { background: #ffe6e3; }
+[data-theme='notebook'] .tagbox.p1 b, [data-theme='notebook'] .turn.p1 { color: var(--p1); }
+[data-theme='notebook'] .tagbox.p2 b, [data-theme='notebook'] .turn.p2 { color: var(--p2); }
+[data-theme='notebook'] .tagbox.active { outline-color: var(--line); }
+[data-theme='notebook'] .tagbox .dots i { border-color: var(--line); background: #fff; }
+[data-theme='notebook'] .tagbox .dots i.won { background: var(--line); }
+[data-theme='notebook'] .back, [data-theme='notebook'] .ask, [data-theme='notebook'] .powersbtn { background: #fff; }
+[data-theme='notebook'] .ab { background: #fff; }
+[data-theme='notebook'] .ab.ult { background: #fff3d6; }
+[data-theme='notebook'] .ab .cd { background: var(--line); border-color: var(--line); }
+[data-theme='notebook'] .ab .cd.done { background: #2bb673; }
+
+/* Sheets and overlays: paper. */
+[data-theme='notebook'] .help { background: rgba(242, 239, 230, 0.55); }
+[data-theme='notebook'] .help .sheet,
+[data-theme='notebook'] .review .sheet,
+[data-theme='notebook'] .lesson .say,
+[data-theme='notebook'] .result { background: #fffdf7; color: var(--ink); border-color: var(--line); box-shadow: 3px 4px 0 rgba(28, 47, 134, 0.85); }
+[data-theme='notebook'] .result h2 { -webkit-text-stroke: 0; }
+[data-theme='notebook'] .review { background: rgba(242, 239, 230, 0.6); }
+[data-theme='notebook'] .lesson .top .kicker { background: #fff; color: var(--ink); border-color: var(--line); box-shadow: 2px 3px 0 rgba(28, 47, 134, 0.85); }
+[data-theme='notebook'] .wetnote { border-color: var(--line); background: #fff; color: var(--ink); }
+[data-theme='notebook'] .screen.select, [data-theme='notebook'] .screen.pass { background: linear-gradient(rgba(242, 239, 230, 0.75), rgba(242, 239, 230, 0.95)); }
+[data-theme='notebook'] .agentcard { background: #fffdf7; color: var(--ink); border-color: var(--line); }
+[data-theme='notebook'] .agentcard .who, [data-theme='notebook'] .agentcard .line { color: var(--ink); }
+[data-theme='notebook'] .pw { background: #fff; color: var(--ink); border-color: var(--line); }
+[data-theme='notebook'] .preview p { color: var(--ink); }
+[data-theme='notebook'] .lesson .whoacts { color: #fff; border-color: var(--line); }

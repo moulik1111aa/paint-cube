@@ -189,7 +189,7 @@ export function simulate(mode: 'rotating' | 'cascade', games: number, seed = 1, 
 // or now and then at random. Seeded noise makes the play imperfect.
 
 import {
-  abilitiesOf, abilityBlocked, abilityUses, agentTurnMoves, applyAgentMove, isUlt, nextToFade,
+  abilitiesOf, abilityBlocked, abilityUses, agentTurnMoves, applyAgentMove, isUlt, nextToFade, tuning, ultCostOf,
   type AbilityUse, type AgentRound, type AgentsState, type AgentId, type AbilityId,
 } from '../core/agents.ts';
 import { applyMove, checkMove, newMatch, nextRound, type MatchState, type Move } from '../core/match.ts';
@@ -408,8 +408,8 @@ export function agentBotTurn(m: MatchState, random: () => number, opt: AgentBotO
   const plain = bestAgentMove(s, random, opt.noise, deep);
   if (!opt.usePowers) return [plain.move];
   // Score each sampled ability use cheaply (best follow-up without the reply search).
-  const cands: { use: AbilityUse; s1: S; quick: number }[] = [];
-  for (const id of abilitiesOf(s.a.picks[p])) {
+  const cands: { use: AbilityUse; s1: S; quick: number; bonus: number }[] = [];
+  for (const id of abilitiesOf(s.a.picks[p], s.a.simple)) {
     if (abilityBlocked(s.r, s.a, id)) continue;
     const uses = abilityUses(s.r, s.a, id);
     const n = isUlt(id) && s.r.mode === 'rotating' && id === 'flip' ? opt.samples * 4 : opt.samples;
@@ -422,7 +422,10 @@ export function agentBotTurn(m: MatchState, random: () => number, opt: AgentBotO
         continue;
       }
       // Cheap first pass: how good is the position the power leaves (before our move)?
-      cands.push({ use, s1, quick: agentValue(s1, p, false) + gauss(random) * opt.noise });
+      // Freeze's worth is in the other player's next turn: more when their ultimate is ready.
+      const o = (1 - p) as Player;
+      const freezeBonus = use.id === 'freeze' ? (s.a.ult[o] >= ultCostOf(tuning(s.r.mode, s.a.simple), s.a.picks[o]) ? 4 : 1.2) : 0;
+      cands.push({ use, s1, quick: agentValue(s1, p, false) + freezeBonus + gauss(random) * opt.noise, bonus: freezeBonus });
     }
   }
   if (!cands.length) return [plain.move];
@@ -435,8 +438,9 @@ export function agentBotTurn(m: MatchState, random: () => number, opt: AgentBotO
     const ult = isUlt(c.use.id);
     // Powers cost their cooldown: use one when it beats the plain move. An ultimate
     // fires when it clearly helps (makes or blocks a threat), or now and then anyway.
-    const margin = ult ? 3 : 0.5;
-    const v = b.value;
+    // Simple rules: a power can't finish a line that turn, so it has to clearly pay off.
+    const margin = ult ? 3 : s.a.simple ? 1.5 : 0.5;
+    const v = b.value + c.bonus;
     if (v > pickV + margin || (ult && v > pickV - 2 && random() < opt.ultChance)) {
       pickUse = c.use;
       pickV = v;
@@ -467,8 +471,9 @@ export function agentBotMatch(
   random: () => number,
   opts: [AgentBotOptions, AgentBotOptions],
   starter: Player = 0,
+  simple = false,
 ): AgentMatchStats {
-  let m = newMatch(mode, starter, picks);
+  let m = newMatch(mode, starter, picks, simple);
   const st: AgentMatchStats = {
     winner: 0,
     starterRoundWins: 0,

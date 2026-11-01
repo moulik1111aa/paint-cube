@@ -192,3 +192,9 @@
 }
 .hint span { flex: 1 1 auto; min-width: 0; }
 .hint .x { flex: none; width: 30px; height: 30px; border-radius: 8px; border: 2px solid #000; background: #0d0a14; color: #f4f1ea; font: 900 14px/1 'Inter Display', system-ui, sans-serif; }
+.toggle[hidden] { display: none; }
+.toggle.small { padding-top: 8px; padding-bottom: 8px; margin-top: -4px; }
+.toggle.small b { font-size: 15px; }
+.toggle.small .txt span { font-size: 12px; }
+.toggle.small.on { background: linear-gradient(100deg, #f5e663, #ff9a3d); }
+.ab .cd.done { background: #2bb673; font-size: 14px; }

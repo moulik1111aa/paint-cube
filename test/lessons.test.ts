@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ABILITY_TEXT } from '../src/ui/agents-ui.ts';
-import { ALL_TOPICS, abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, type Lesson } from '../src/ui/lessons.ts';
+import { ALL_TOPICS, abilityLesson, lessonMove, lessonPowers, lessonStart, stepMoves, topicLesson, topicsFor, type Lesson } from '../src/ui/lessons.ts';
 import { decorOf, type AbilityId } from '../src/core/agents.ts';
 import type { MatchState } from '../src/core/match.ts';
 
@@ -17,6 +17,7 @@ function play(l: Lesson): MatchState {
     if (s.reset) m = lessonStart(l, s.reset);
     for (const mv of stepMoves(l, s, m)) {
       const out = lessonMove(m, mv, l.realTimers);
+      assert.equal(!!out.state.agents!.simple, !!l.simple, `${l.key}: rule set`);
       m = out.state;
       if (DEBUG) console.log(l.key, i, JSON.stringify(mv), out.events.map((e) => e.type).join(','), 'wet', decorOf(m.round, m.agents!).wet, 'cells', m.round.cells.map((c) => (c === null ? '.' : c)).join(''));
     }
@@ -32,7 +33,7 @@ test('topic lessons play legally', () => {
 });
 
 test('every power has a Twist and a Cascade lesson that play legally and use the power', () => {
-  for (const id of Object.keys(ABILITY_TEXT) as AbilityId[]) {
+  for (const id of lessonPowers(false)) {
     for (const mode of ['rotating', 'cascade'] as const) {
       const l = abilityLesson(id, mode);
       let used = false;
@@ -60,4 +61,24 @@ test('the wet paint lesson shows a wet line that does not count, then one that d
   assert.equal(m.round.result, null);
   const end = play(l);
   assert.equal(end.round.result?.winner, 0);
+});
+
+test('Simple lessons: every topic and every Simple power plays legally and uses the power', () => {
+  for (const t of topicsFor(true)) play(topicLesson(t, true));
+  for (const id of lessonPowers(true)) {
+    for (const mode of ['rotating', 'cascade'] as const) {
+      const l = abilityLesson(id, mode, true);
+      assert.ok(l.simple);
+      let used = false;
+      let m = lessonStart(l);
+      for (const s of l.steps) {
+        for (const mv of stepMoves(l, s, m)) {
+          if (mv.kind === 'ability' && mv.id === id) used = true;
+          m = lessonMove(m, mv).state;
+        }
+      }
+      assert.ok(used, `${l.key}: never uses ${id}`);
+      play(l);
+    }
+  }
 });

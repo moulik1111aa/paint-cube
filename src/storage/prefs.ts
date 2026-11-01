@@ -3,6 +3,8 @@
 // is guarded and the app works without it.
 
 import type { MatchState, Mode } from '../core/match.ts';
+import type { TrackId } from '../audio/music.ts';
+import type { ThemeId } from '../theme.ts';
 import { AGENT_IDS, type AgentId } from '../core/agents.ts';
 
 export type HelpTopic = Mode | 'agents';
@@ -24,10 +26,16 @@ export interface Prefs {
   voice: boolean;
   /** Last vs-PC difficulty. */
   pcLevel: PcLevel;
+  /** Agents: the original Pro abilities (wet paint, timers) instead of Simple. */
+  pro: boolean;
+  /** Background music track. */
+  music: TrackId;
+  /** Look: Street or Notebook. */
+  theme: ThemeId;
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal' };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'street' };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -44,6 +52,9 @@ export function loadPrefs(): Prefs {
       agents: p.agents === true,
       voice: p.voice !== false,
       pcLevel: isLevel(p.pcLevel) ? p.pcLevel : 'normal',
+      pro: p.pro === true,
+      music: (['off', 'lofi', 'zen', 'street', 'night'] as const).includes(p.music as never) ? (p.music as TrackId) : 'lofi',
+      theme: p.theme === 'notebook' ? 'notebook' : 'street',
       picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],
     };
   } catch {

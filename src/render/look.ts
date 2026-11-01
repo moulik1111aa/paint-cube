@@ -4,11 +4,23 @@
 // Everything is generated at startup: no image files to license or load.
 
 import type { Three } from './three.ts';
+import { theme } from '../theme.ts';
+import { doodleTexture, washiTexture } from './notebook.ts';
 
 export const PAINT = { orange: '#ff6a13', blue: '#1aa0ff' } as const;
-export const PLAYER_COLORS = [PAINT.orange, PAINT.blue] as const;
-export const CORE_COLOR = '#ffd84a';
-export const INK = '#07060b';
+/** Player colours in the 3D scene (the Notebook theme swaps them for blue and red ink). */
+export const PLAYER_COLORS: string[] = [PAINT.orange, PAINT.blue];
+export let CORE_COLOR = '#ffd84a';
+export let INK = '#07060b';
+
+/** Apply the current theme's colours (call before building a scene). */
+export function applyThemeColors(): void {
+  const nb = theme() === 'notebook';
+  PLAYER_COLORS[0] = nb ? '#2350d8' : PAINT.orange;
+  PLAYER_COLORS[1] = nb ? '#d63b33' : PAINT.blue;
+  CORE_COLOR = nb ? '#e2a622' : '#ffd84a'; // Notebook: a kintsugi-gold Core
+  INK = nb ? '#1f3fa8' : '#07060b';
+}
 
 /** A box with rounded edges: a subdivided box whose vertices are pulled onto a rounded shell. */
 export function roundedBox(T: Three, size: number, radius: number, seg = 5): any {
@@ -222,6 +234,22 @@ export interface Materials {
 
 export function makeMaterials(T: Three, env: any): Materials {
   const ramp = toonRamp(T);
+  if (theme() === 'notebook') {
+    // Paper blocks and ballpoint marks: matte, no gloss.
+    return {
+      ramp,
+      casing: new T.MeshStandardMaterial({ color: '#ffffff', map: washiTexture(T), roughness: 0.97, metalness: 0 }),
+      casingEdge: new T.MeshBasicMaterial({ color: INK, transparent: true, opacity: 0.4 }),
+      core: new T.MeshStandardMaterial({ color: CORE_COLOR, emissive: CORE_COLOR, emissiveIntensity: 0.5, roughness: 0.35, metalness: 0.6, envMap: env, envMapIntensity: 0.8 }),
+      paint: [
+        new T.MeshStandardMaterial({ color: '#ffffff', map: doodleTexture(T, 'maru', PLAYER_COLORS[0], 1), roughness: 0.95 }),
+        new T.MeshStandardMaterial({ color: '#ffffff', map: doodleTexture(T, 'batsu', PLAYER_COLORS[1], 2), roughness: 0.95 }),
+      ],
+      drip: [new T.MeshBasicMaterial({ color: PLAYER_COLORS[0] }), new T.MeshBasicMaterial({ color: PLAYER_COLORS[1] })],
+      ink: new T.MeshBasicMaterial({ color: INK, side: T.BackSide }),
+      drop: new T.MeshToonMaterial({ color: '#ffffff', gradientMap: ramp }),
+    };
+  }
   return {
     ramp,
     // Smooth satin blocks with a fine, faint grain (heavy grain read as blur on a phone).
