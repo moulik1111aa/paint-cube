@@ -39,10 +39,12 @@ export interface Prefs {
   /** The look was chosen in Settings (before build 22 Street was the default, so an
    *  old saved 'street' without this switches to Notebook once). */
   themePicked: boolean;
+  /** The "Playing for the first time?" question has been answered. */
+  welcomed: boolean;
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'notebook', buzz: true, musicVol: 2, themePicked: false };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'notebook', buzz: true, musicVol: 2, themePicked: false, welcomed: false };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -63,6 +65,7 @@ export function loadPrefs(): Prefs {
       music: (['off', 'lofi', 'zen', 'street', 'night'] as const).includes(p.music as never) ? (p.music as TrackId) : 'lofi',
       theme: p.theme === 'street' && p.themePicked === true ? 'street' : 'notebook',
       themePicked: p.themePicked === true,
+      welcomed: p.welcomed === true,
       buzz: typeof p.buzz === 'boolean' ? p.buzz : p.sound !== false,
       musicVol: p.musicVol === 1 || p.musicVol === 3 ? p.musicVol : 2,
       picks: Array.isArray(p.picks) && isAgent(p.picks[0]) && isAgent(p.picks[1]) ? [p.picks[0], p.picks[1]] : [...DEFAULTS.picks],

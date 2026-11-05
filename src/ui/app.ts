@@ -25,11 +25,16 @@ import { CENTER, LINES } from '../core/geometry.ts';
 import { ABILITY_TEXT, AGENT_LOOK, abilityIcon, abilityText, agentArt, playPreview } from './agents-ui.ts';
 import { haptics } from '../platform/haptics.ts';
 import { voice } from '../platform/voice.ts';
-import { abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, topicsFor, type Lesson, type Topic } from './lessons.ts';
+import { BASICS, abilityLesson, lessonMove, lessonStart, stepMoves, topicLesson, topicsFor, type Lesson, type Topic } from './lessons.ts';
+import { PRACTICE } from './coach.ts';
 import { OnlineSession, CODE_LENGTH, normaliseCode, type JoinError, type RoomView } from '../net/room.ts';
 import { connectFirebase } from '../net/firebase.ts';
 import { FIREBASE } from '../net/config.ts';
 import { MemoryHub, MemoryRelay, type Relay } from '../net/relay.ts';
+
+/** The game's title, drawn in HTML over the 3D scene so it is crisp and always on screen. */
+const BRAND =
+  '<h1 class="brand" aria-label="Tic Tac Three by Moulik"><span class="t1">Tic Tac</span><span class="t2">Three</span><span class="by">by Moulik</span></h1>';
 
 declare global {
   interface Window {
@@ -40,10 +45,15 @@ declare global {
       tap: (cell: number) => Promise<void>;
       busy: () => boolean;
       swipe: (cell: number, dx: number, dy: number) => boolean;
+      twistFor: (cell: number, dx: number, dy: number, face?: [number, number, number]) => Twist | null;
       aim: (cell: number | null) => void;
       advance: (sec: number, draw?: boolean) => void;
       state: () => MatchState | null;
       lesson: () => boolean;
+      /** Tests: marks drawn in the 3D scene, by cell. */
+      marksShown: () => number[];
+      /** Tests: put cells on the board and start animating events (the menu demo's path). */
+      demoPlay: (cells: (0 | 1 | null)[], events: GameEvent[]) => void;
     };
   }
 }
@@ -151,6 +161,8 @@ export function startApp(app: HTMLElement): void {
   const simpleNow = () => (match?.agents ? !!match.agents.simple : !prefs.pro);
   /** Trial: your powers and ultimate are always ready (vs an easy PC; not saved). */
   let trial = false;
+  /** The guided first game: which coached turn we're on (null when not practising). */
+  let coach: { i: number; said: string } | null = null;
   const pcRandom = rng(Date.now() % 100000);
   let busy = false;
   /** A show-me lesson is playing on the cube (the game's input is paused). */
@@ -168,7 +180,7 @@ export function startApp(app: HTMLElement): void {
   const meOf = () => (online ? online.me : null);
   const isMyTurn = () => (online ? (match ? match.round.turn === online.me : false) : !(pc && match && match.round.turn === 1));
 
-  ui.innerHTML = '<div class="screen loading"><h1 class="logo"><span class="p1">Tic Tac</span><span class="p2">Three</span><small class="by">by Moulik</small></h1></div>';
+  ui.innerHTML = `<div class="screen loading">${BRAND}</div>`;
 
   let toastTimer = 0;
   const toast = (msg: string) => {
@@ -276,7 +288,7 @@ export function startApp(app: HTMLElement): void {
     startDemo();
     show(
       'nickname',
-      `<h1 class="sr-only">Tic Tac Three by Moulik</h1><form class="card"><label for="nick">What do we call you?</label>` +
+      `${BRAND}<form class="card"><label for="nick">What do we call you?</label>` +
         `<input id="nick" name="nick" maxlength="14" autocomplete="nickname" placeholder="Your tag" value="${esc(prefs.nickname)}" required>` +
         '<button class="btn big" type="submit">Let\'s go</button></form>',
     );
@@ -296,11 +308,13 @@ export function startApp(app: HTMLElement): void {
   function homeScreen(): void {
     pc = null;
     trial = false;
+    coach = null;
+    board?.highlight(null);
     const saved = loadMatch();
     if (screen !== 'nickname') startDemo();
     show(
       'home',
-      `<h1 class="sr-only">Tic Tac Three by Moulik</h1><p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
+      `${BRAND}<p class="hello">Yo, <b>${esc(prefs.nickname)}</b></p>` +
         '<div class="stack">' +
         (saved ? `<button class="btn big resume" data-go="resume">Resume · ${esc(saved.names[0])} vs ${esc(saved.names[1])}${saved.pc ? ` (${saved.pc})` : ''} · R${saved.match.roundNumber}</button>` : '') +
         '<button class="btn big" data-go="pc">Play vs PC</button>' +
@@ -310,6 +324,7 @@ export function startApp(app: HTMLElement): void {
           ? '<button class="btn big alt" data-go="online">Play online</button></div>'
           : '<button class="btn big alt" data-go="online" disabled>Play online <small>soon</small></button></div>') +
         `<div class="row"><button class="link" data-go="rename">Change name</button>` +
+        '<button class="link" data-go="learn">How to play</button>' +
         '<button class="link" data-go="settings">⚙ Settings</button></div>' +
         `<p class="build">v${esc(window.__BUILD__?.version ?? '0')} · build ${esc(String(window.__BUILD__?.build ?? 'dev'))}</p>`,
     );
@@ -332,6 +347,127 @@ export function startApp(app: HTMLElement): void {
     });
     ui.querySelector('[data-go="rename"]')!.addEventListener('click', nicknameScreen);
     ui.querySelector('[data-go="settings"]')!.addEventListener('click', settingsSheet);
+    ui.querySelector('[data-go="learn"]')!.addEventListener('click', () => (sfx.unlock(), startTutorial()));
+    if (!prefs.welcomed) welcomeSheet();
+  }
+
+  // ---- First time: "Playing for the first time?" → a watch-first demo → a coached game ----
+  function welcomeSheet(): void {
+    ui.querySelector('.welcome')?.remove();
+    const sheet = document.createElement('div');
+    sheet.className = 'review welcome';
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-label', 'Playing for the first time?');
+    sheet.innerHTML =
+      '<div class="sheet"><p class="kicker">Welcome</p><h2>Playing for the first time?</h2>' +
+      '<p>Watch a 1-minute demo on the cube, then play a practice game where the computer shows you each move, all the way to your first win.</p>' +
+      '<div class="stack"><button class="btn big" data-go="teach">Yes, show me how</button>' +
+      '<button class="btn alt" data-go="skip">No, I know how to play</button></div></div>';
+    const done = () => {
+      prefs = { ...prefs, welcomed: true };
+      savePrefs(prefs);
+      sheet.remove();
+    };
+    sheet.querySelector('[data-go="teach"]')!.addEventListener('click', () => {
+      sfx.unlock();
+      done();
+      startTutorial();
+    });
+    sheet.querySelector('[data-go="skip"]')!.addEventListener('click', done);
+    ui.querySelector('.screen')?.appendChild(sheet);
+  }
+
+  /** The demo, then the practice game. */
+  function startTutorial(): void {
+    if (!board) return void toast('3D is still loading');
+    ui.querySelector('.welcome')?.remove();
+    // Finished the demo: straight into the practice game. Closed early: back where we were.
+    runLessons([BASICS], (finished) => (finished ? startPractice() : screen === 'home' ? undefined : homeScreen()));
+  }
+
+  function startPractice(): void {
+    stopDemo();
+    names = [prefs.nickname || 'You', 'PC'];
+    pc = 'easy';
+    trial = false;
+    coach = { i: 0, said: '' };
+    match = newMatch('rotating', 0);
+    busy = false;
+    if (board) {
+      board.attract = false;
+      board.setMode('rotating');
+      board.sync(match.round.cells);
+      board.decorate(null);
+    }
+    matchScreen();
+  }
+
+  /** The coach card: what to do now (or what the computer is doing), lit-up blocks, voice. */
+  function coachDraw(): void {
+    if (!coach || !match || screen !== 'match') return;
+    const step = PRACTICE[Math.min(coach.i, PRACTICE.length - 1)];
+    const theirs = match.round.turn === 1 || busy;
+    const you = theme() === 'notebook' ? 'blue pen' : 'orange';
+    const text = (match.round.result ? '' : theirs ? (PRACTICE[coach.i]?.pcSay ?? '') : step.say).replace('{you}', you);
+    let el = ui.querySelector('.coach') as HTMLElement | null;
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'coach';
+      el.setAttribute('role', 'status');
+      ui.querySelector('.screen')?.appendChild(el);
+    }
+    el.hidden = !text;
+    const twistStep = !theirs && step.you.kind === 'twist';
+    el.innerHTML =
+      `<div class="top"><p class="kicker">Practice · ${Math.min(coach.i + 1, PRACTICE.length)}/${PRACTICE.length}</p>` +
+      (twistStep ? '<button class="link" data-showme>Do it for me</button>' : '') +
+      `${voiceBtn()}<button class="link" data-skip>Skip</button></div>` +
+      `<p>${esc(text)}</p>`;
+    el.querySelector('[data-voice]')!.addEventListener('click', () => {
+      setVoice(!prefs.voice);
+      coachDraw();
+      if (prefs.voice) voice.say(text);
+    });
+    el.querySelector('[data-skip]')!.addEventListener('click', homeScreen);
+    el.querySelector('[data-showme]')?.addEventListener('click', () => {
+      if (busy || !match || match.round.turn !== 0) return;
+      board?.highlight(null);
+      void board?.cancelTwist();
+      ui.querySelector('.confirm')?.remove();
+      void doMove(step.you);
+    });
+    if (text && text !== coach.said) {
+      coach.said = text;
+      voice.say(text);
+    }
+    board?.highlight(!theirs && !match.round.result ? step.focus : null, PLAYER_COLORS_CSS[0]);
+  }
+
+  /** Practice: is this the move the coach asked for? If not, say what to do instead. */
+  function coachAllows(move: Move): boolean {
+    if (!coach || !match) return true;
+    const want = PRACTICE[coach.i]?.you;
+    if (!want) return true;
+    if (want.kind === 'twist') {
+      if (move.kind !== 'twist') {
+        toast('This time, twist: swipe along the glowing blocks.');
+        return false;
+      }
+      if (move.twist.axis !== want.twist.axis || move.twist.slice !== want.twist.slice) {
+        toast('Swipe along the glowing blocks.');
+        return false;
+      }
+      if (move.twist.dir !== want.twist.dir) {
+        toast('Almost! Swipe the other way.');
+        return false;
+      }
+      return true;
+    }
+    if (move.kind !== 'place' || want.kind !== 'place' || move.cell !== want.cell) {
+      toast(move.kind === 'twist' ? 'No twisting yet: tap the glowing block.' : 'Tap the glowing block.');
+      return false;
+    }
+    return true;
   }
 
   // ---- settings: sound, vibration, music, voice and the look, in one sheet ----
@@ -511,11 +647,11 @@ export function startApp(app: HTMLElement): void {
    * Play lessons one after another over the current screen (which is hidden meanwhile),
    * then put the board back as it was and run `back`.
    */
-  function runLessons(lessons: Lesson[], back: () => void): void {
+  function runLessons(lessons: Lesson[], back: (finished: boolean) => void): void {
     // Lessons call the players Orange and Blue; in the Notebook look the pens are blue and red.
     const penWords = (text: string) =>
       theme() === 'notebook' ? text.replace(/\bBlue\b/g, '\u0000').replace(/\bOrange\b/g, 'Blue').replace(/\u0000/g, 'Red') : text;
-    if (!board || lessons.length === 0) return back();
+    if (!board || lessons.length === 0) return back(false);
     const b = board;
     const wasMatch = screen === 'match' && match ? match : null;
     cancelTargeting(false);
@@ -535,7 +671,7 @@ export function startApp(app: HTMLElement): void {
     let m: MatchState | null = null;
     let running = false;
 
-    const close = () => {
+    const close = (finished = false) => {
       token++;
       lessonOn = null;
       voice.stop();
@@ -552,7 +688,7 @@ export function startApp(app: HTMLElement): void {
         b.decorate(null);
         b.ages(null);
       }
-      back();
+      back(finished);
     };
     lessonOn = close;
 
@@ -571,16 +707,20 @@ export function startApp(app: HTMLElement): void {
       const st = l.steps[si];
       const last = si === l.steps.length - 1;
       const lastAll = last && li === lessons.length - 1;
-      const who = m?.agents ? `<span class="whoacts ${COLORS[m.round.turn]}">${penWords(m.round.turn === 0 ? 'Orange' : 'Blue')} · ${AGENTS[m.agents.picks[m.round.turn]].name}</span>` : '';
+      const who = m?.agents
+        ? `<span class="whoacts ${COLORS[m.round.turn]}">${penWords(m.round.turn === 0 ? 'Orange' : 'Blue')} · ${AGENTS[m.agents.picks[m.round.turn]].name}</span>`
+        : m && !m.round.result
+          ? `<span class="whoacts ${COLORS[m.round.turn]}">${penWords(m.round.turn === 0 ? 'Orange' : 'Blue')}’s turn</span>`
+          : '';
       el.innerHTML =
-        `<div class="top"><p class="kicker">Show me · ${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p>${voiceBtn()}<button class="x" data-close aria-label="Close">✕</button></div>` +
+        `<div class="top"><p class="kicker">${l.classic ? '' : 'Show me · '}${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p>${voiceBtn()}<button class="x" data-close aria-label="Close">✕</button></div>` +
         `<div class="say">${who}<p>${esc(penWords(st.say))}</p>` +
         `<div class="pips">${l.steps.map((_, k) => `<i class="${k === si ? 'on' : k < si ? 'done' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-replay>↺ Replay</button>` +
-        `<button class="btn" data-next ${running ? 'disabled' : ''}>${lastAll ? 'Done' : last ? 'Next lesson' : 'Next'}</button></div></div>` +
-        '<div class="abilities demo" aria-hidden="true"></div>';
+        `<button class="btn" data-next ${running ? 'disabled' : ''}>${lastAll ? (l.classic ? 'Now you try ▶' : 'Done') : last ? 'Next lesson' : 'Next'}</button></div></div>` +
+        (l.classic ? '' : '<div class="abilities demo" aria-hidden="true"></div>');
       bar(null);
-      el.querySelector('[data-close]')!.addEventListener('click', close);
+      el.querySelector('[data-close]')!.addEventListener('click', () => close());
       el.querySelector('[data-voice]')!.addEventListener('click', () => {
         setVoice(!prefs.voice);
         const v = el.querySelector('[data-voice]') as HTMLElement;
@@ -593,7 +733,7 @@ export function startApp(app: HTMLElement): void {
         if (running) return;
         if (!last) void step(si + 1);
         else if (!lastAll) void start(li + 1);
-        else close();
+        else close(true);
       });
     };
 
@@ -608,7 +748,7 @@ export function startApp(app: HTMLElement): void {
         m = lessonStart(l, st.reset);
         b.sync(m.round.cells, crackingOf(m));
         b.ages(agesOf(m));
-        b.decorate(decorOf(m.round, m.agents!));
+        b.decorate(m.agents ? decorOf(m.round, m.agents) : null);
       }
       running = true;
       draw();
@@ -643,7 +783,7 @@ export function startApp(app: HTMLElement): void {
         bar(null);
         await b.play(out.events);
         if (my !== token) return;
-        b.decorate(decorOf(m.round, m.agents!));
+        b.decorate(m.agents ? decorOf(m.round, m.agents) : null);
         b.ages(agesOf(m));
         bar(null);
         await sleep(0.35);
@@ -661,7 +801,7 @@ export function startApp(app: HTMLElement): void {
       m = lessonStart(l);
       b.setMode(l.mode);
       b.sync(m.round.cells, crackingOf(m));
-      b.decorate(decorOf(m.round, m.agents!));
+      b.decorate(m.agents ? decorOf(m.round, m.agents) : null);
       b.ages(agesOf(m));
       await step(0);
     }
@@ -897,7 +1037,7 @@ export function startApp(app: HTMLElement): void {
 
   /** Keep the local match on the device after every change. */
   const persist = () => {
-    if (!online && match && !trial) saveMatch({ match, names, ...(pc ? { pc } : {}) });
+    if (!online && match && !trial && !coach) saveMatch({ match, names, ...(pc ? { pc } : {}) });
   };
 
   function startMatch(mode: Mode, picks?: [AgentId, AgentId], simple = !prefs.pro): void {
@@ -1164,6 +1304,7 @@ export function startApp(app: HTMLElement): void {
       board.setTurn(r.result || busy || !isMyTurn() ? null : r.turn);
       board.names = [names[0], names[1]];
     }
+    coachDraw();
     maybePc();
   }
 
@@ -1257,7 +1398,8 @@ export function startApp(app: HTMLElement): void {
     const o = PC_OPTS[pc];
     let moves: Move[];
     try {
-      moves = m0.agents
+      if (coach && PRACTICE[coach.i]?.pc) moves = [PRACTICE[coach.i].pc!];
+      else moves = m0.agents
         ? agentBotTurn(m0, pcRandom, { noise: o.noise, usePowers: true, ultChance: o.ultChance, samples: o.samples })
         : m0.round.mode === 'rotating'
           ? [rotatingBotMove(m0.round, pcRandom, o.noise)]
@@ -1289,6 +1431,7 @@ export function startApp(app: HTMLElement): void {
     }
     busy = false;
     pcBusy = false;
+    if (coach) coach.i++;
     if (!match || screen !== 'match') return;
     updateHud();
     if (match.round.result) roundOver();
@@ -1332,7 +1475,7 @@ export function startApp(app: HTMLElement): void {
       toast(REASONS[why] ?? 'Not allowed.');
       return false;
     }
-    return true;
+    return coachAllows({ kind: 'twist', twist: t });
   }
   function onTwistReady(t: Twist): void {
     if (targeting) {
@@ -1404,6 +1547,7 @@ export function startApp(app: HTMLElement): void {
       toast(REASONS[why] ?? 'Not allowed.');
       return;
     }
+    if (!coachAllows(move)) return void board.refuse(cell);
     await doMove(move);
   }
 
@@ -1428,9 +1572,11 @@ export function startApp(app: HTMLElement): void {
     busy = true;
     board.twistEnabled = false;
     board.setTurn(null);
+    if (coach) board.highlight(null);
     const out = applyMove(match, move);
     match = out.state;
     persist();
+    if (coach) coachDraw();
     const turnEl = ui.querySelector('.turn') as HTMLElement | null;
     if (turnEl) turnEl.textContent = '';
     board.ages(null);
@@ -1443,6 +1589,7 @@ export function startApp(app: HTMLElement): void {
 
   function roundOver(): void {
     if (!match) return;
+    if (coach) return practiceOver();
     const w = match.round.result!.winner;
     const over = match.winner !== null;
     const title =
@@ -1475,6 +1622,32 @@ export function startApp(app: HTMLElement): void {
     });
     overlay.querySelector('[data-go="rematch"]')?.addEventListener('click', () => startMatch(match!.mode, match!.agents?.picks, !!match!.agents?.simple));
     overlay.querySelector('[data-go="home"]')?.addEventListener('click', homeScreen);
+  }
+
+  /** The end of the practice game: the player's first win, and where to go next. */
+  function practiceOver(): void {
+    ui.querySelector('.coach')?.remove();
+    board?.highlight(null);
+    const won = match?.round.result?.winner === 0;
+    const overlay = document.createElement('div');
+    overlay.className = 'result p1';
+    overlay.innerHTML =
+      `<h2>${won ? 'You won! 🎉' : 'Round over'}</h2>` +
+      '<p class="wait">That’s the game: three in a row, keep at most 3 marks, and twist when painting won’t do. A full match is best of 3 rounds.</p>' +
+      '<div class="stack"><button class="btn big" data-go="pcnow">Play the PC</button><button class="btn alt" data-go="again">Watch the demo again</button><button class="btn alt" data-go="home">Home</button></div>';
+    ui.querySelector('.result')?.remove();
+    ui.querySelector('.screen')!.appendChild(overlay);
+    const text = won ? 'You won! That’s the game. Now try a real match against the PC.' : '';
+    if (text) voice.say(text);
+    coach = null;
+    pc = null;
+    overlay.querySelector('[data-go="pcnow"]')!.addEventListener('click', () => {
+      prefs = { ...prefs, pcLevel: 'easy' };
+      savePrefs(prefs);
+      localSetup(true);
+    });
+    overlay.querySelector('[data-go="again"]')!.addEventListener('click', startTutorial);
+    overlay.querySelector('[data-go="home"]')!.addEventListener('click', homeScreen);
   }
 
   // ---- online ----
@@ -1700,10 +1873,16 @@ export function startApp(app: HTMLElement): void {
         tap: (c) => onTap(c),
         busy: () => busy || pcBusy,
         swipe: (c, dx, dy) => !!board?.swipe(c, dx, dy),
+        twistFor: (c, dx, dy, face) => board?.twistFor(c, dx, dy, face) ?? null,
         aim: (c) => board?.aim(c),
         advance: (sec, draw = true) => board?.advance(sec, draw),
         state: () => match,
         lesson: () => !!lessonOn,
+        marksShown: () => board?.marksShown() ?? [],
+        demoPlay: (cells, events) => {
+          board?.sync(cells);
+          void board?.play(events);
+        },
       };
     });
 }

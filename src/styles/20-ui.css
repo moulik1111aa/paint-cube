@@ -314,3 +314,38 @@
 .level { appearance: none; padding: 10px 6px; border: 3px solid #000; border-radius: 12px; background: #d9d4e4; color: #0b0b12; font: 900 15px/1 'Inter Display', system-ui, sans-serif; text-transform: uppercase; box-shadow: 0 3px 0 #000; }
 .level.on { background: var(--p2); transform: translateY(-2px) rotate(-1deg); outline: 3px solid #fff; outline-offset: 1px; }
 .home .row { flex-wrap: wrap; gap: 8px 18px; max-width: 360px; }
+
+/* The title: HTML over the scene (the wall art no longer carries it), so it is sharp and
+   sized to the screen. Portrait: centred at the top. Landscape: top-left, beside the cube. */
+.brand {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 12px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: 'Inter Display', system-ui, sans-serif;
+  font-weight: 900;
+  font-size: clamp(40px, min(15.5vw, 9vh), 96px);
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+  pointer-events: none;
+  transform: rotate(-4deg);
+}
+.brand span { display: block; -webkit-text-stroke: 0.09em #0d0a14; paint-order: stroke fill; filter: drop-shadow(0.05em 0.06em 0 #120b1f); }
+.brand .t1 { color: var(--p1); }
+.brand .t2 { color: var(--p2); margin-left: 0.6em; }
+.brand .by { margin: 0.25em 0 0 1.6em; font-size: 0.32em; letter-spacing: 0.02em; text-transform: none; font-style: italic; color: #f5e663; -webkit-text-stroke: 0.14em #0d0a14; }
+.screen.loading .brand { position: static; transform: rotate(-4deg) scale(1.1); }
+@media (min-aspect-ratio: 5/4) {
+  .brand { left: max(24px, env(safe-area-inset-left)); right: auto; align-items: flex-start; font-size: clamp(32px, min(5vw, 11vh), 84px); }
+  .brand .t2 { margin-left: 0.3em; }
+  .brand .by { margin-left: 1.2em; }
+  /* Buttons in a column on the right, clear of the cube. */
+  .screen.home, .screen.nickname { align-items: flex-end; justify-content: center; padding-right: max(4vw, env(safe-area-inset-right)); }
+  .screen.home .hello, .screen.home .row, .screen.home .build { width: min(340px, 30vw); text-align: center; justify-content: center; }
+  .screen.home .stack { width: min(340px, 30vw); }
+}

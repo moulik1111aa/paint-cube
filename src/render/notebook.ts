@@ -119,51 +119,7 @@ export function pageTexture(T: Three): any {
     g.lineWidth = 2;
     g.stroke();
   }
-  // The title, hand-lettered in outline with hatching, like a doodle in a margin.
-  g.font = '900 136px "Inter Display", system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  for (const [word, y, rot, size] of [['TIC TAC', H * 0.335, -0.05, 112], ['THREE', H * 0.415, 0.03, 136]] as const) {
-    g.font = `900 ${size}px "Inter Display", system-ui, sans-serif`;
-    g.save();
-    g.translate(W / 2 + 10, y);
-    g.rotate(rot);
-    // Hatched fill, clipped to the letters.
-    const [mc, mg] = canvas(W, 260);
-    mg.font = g.font;
-    mg.textAlign = 'center';
-    mg.textBaseline = 'middle';
-    mg.fillStyle = '#000';
-    mg.fillText(word, W / 2, 130);
-    mg.globalCompositeOperation = 'source-in';
-    hatch(mg, 0, 0, W, 260, -0.9, 9, r, INK_BLUE, 2.4);
-    g.globalAlpha = 0.75;
-    g.drawImage(mc, -W / 2, -130);
-    g.globalAlpha = 1;
-    // Outline drawn twice, a little off, like a quick pen sketch.
-    g.lineJoin = 'round';
-    for (let k = 0; k < 2; k++) {
-      g.lineWidth = 3.2 - k;
-      g.strokeStyle = INK_BLUE;
-      g.globalAlpha = 0.9 - k * 0.4;
-      g.strokeText(word, (r() - 0.5) * 4, (r() - 0.5) * 4);
-    }
-    g.globalAlpha = 1;
-    g.restore();
-  }
-  // The byline, signed in pen under the title with a quick underline.
-  g.save();
-  g.translate(W / 2 + 120, H * 0.47);
-  g.rotate(-0.06);
-  g.font = 'italic 700 54px "Inter Display", system-ui, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillStyle = INK_BLUE;
-  g.globalAlpha = 0.9;
-  g.fillText('by Moulik', 0, 0);
-  g.globalAlpha = 1;
-  g.restore();
-  pen(g, [[W / 2 + 10, H * 0.47 + 40], [W / 2 + 120, H * 0.47 + 30], [W / 2 + 236, H * 0.47 + 22]], r, INK_BLUE, 3);
+  // (The title is HTML over the scene now: crisp at any screen size.)
   // Doodles: stars, a spiral, a little cube, arrows, "3x3".
   const star = (x: number, y: number, s: number) => {
     const pts: [number, number][] = [];

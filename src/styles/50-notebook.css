@@ -101,3 +101,13 @@
 [data-theme='notebook'] .review .kicker { color: var(--p2); }
 [data-theme='notebook'] .review .x { background: var(--line); color: #fff; }
 [data-theme='notebook'] .logo .by { color: var(--ink); }
+/* Title in pen: outlined letters with a little hatching shadow, signed underneath. */
+[data-theme='notebook'] .brand span { color: #fffdf7; -webkit-text-stroke: 0.035em var(--ink); paint-order: normal; filter: none; text-shadow: 0.05em 0.05em 0 rgba(35, 80, 216, 0.22); }
+[data-theme='notebook'] .brand .t1, [data-theme='notebook'] .brand .t2 { color: #fffdf7; }
+[data-theme='notebook'] .brand .by { color: var(--ink); -webkit-text-stroke: 0; text-shadow: none; border-bottom: 0.08em solid var(--ink); padding-bottom: 0.05em; }
+[data-theme='notebook'] .coach { background: #fffdf7; color: var(--ink); border-color: var(--line); box-shadow: 3px 4px 0 rgba(28, 47, 134, 0.85); }
+[data-theme='notebook'] .coach .kicker { color: var(--p2); }
+[data-theme='notebook'] .coach .link { color: var(--ink); }
+[data-theme='notebook'] .review.welcome h2 { color: var(--ink); }
+[data-theme='notebook'] .result .wait { color: var(--ink); text-shadow: none; }
+[data-theme='notebook'] .coach [data-showme] { color: var(--p1); }

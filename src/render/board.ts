@@ -33,11 +33,15 @@ export interface Board {
   cancelTwist(): Promise<void>;
   /** Start a twist preview from a swipe (tests): cell, then a swipe in screen pixels. */
   swipe(cell: number, dx: number, dy: number): Twist | null;
+  /** The twist a swipe on `cell` would make, without starting it (tests). */
+  twistFor(cell: number, dx: number, dy: number, face?: [number, number, number]): Twist | null;
   setMode(mode: Mode): void;
   /** Show these cells immediately, without animation (`cracking`: marks that fade next). */
   sync(cells: readonly Cell[], cracking?: readonly number[]): void;
   /** Animate the engine's events in order; resolves when the board is calm. */
   play(events: readonly GameEvent[]): Promise<void>;
+  /** Paint marks actually in the scene (tests: must match the engine's cells). */
+  marksShown(): number[];
   /** A small "no" shake for a refused tap. */
   refuse(cell: number): void;
   /** Idle presentation (slow sway) when no one is playing. */
@@ -419,6 +423,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   function placeShell(cell: number, p: Player, popIn: boolean): any {
     const shell = makeShell(p, cell * 31 + Math.floor(Math.random() * 1000));
+    shell.userData.mark = true;
     shell.position.copy(slot(cell));
     cube.add(shell);
     shells[cell] = shell;
@@ -436,7 +441,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   function removeShell(cell: number): void {
     const s = shells[cell];
-    if (s) cube.remove(s);
+    // removeFromParent, not cube.remove: during a twist the shell sits in the layer's pivot.
+    if (s) s.removeFromParent();
     shells[cell] = null;
     owners[cell] = null;
   }
@@ -560,12 +566,25 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     });
     const bodies = cells.flatMap((i) => bodiesOf(shells[i]));
     const saved = bodies.map((m: any) => m.material);
+    const own = cells.map((i) => shells[i]);
+    const e0 = epoch;
     sfx.whoosh();
     await anim(0.2, (k) => {
       beams.forEach((b) => b.scale.set(0.2 + k * 1.2, 1, 0.2 + k * 1.2));
-      cells.forEach((i) => shells[i]?.scale.setScalar(1 + 0.2 * ease.outCubic(k)));
+      own.forEach((sh) => sh?.scale.setScalar(1 + 0.2 * ease.outCubic(k)));
       if (k > 0.4) bodies.forEach((m: any) => (m.material = flashMat));
     });
+    if (e0 !== epoch) {
+      // A new board arrived mid-burst: tidy up without touching it.
+      for (const b of beams) {
+        cube.remove(b);
+        b.geometry.dispose();
+        b.material.dispose();
+      }
+      bodies.forEach((m: any, k: number) => (m.material = saved[k]));
+      flashMat.dispose();
+      return;
+    }
     // A combo: several lines at once, or a later cascade wave.
     const combo = Math.max(wave, lines.length);
     const big = 1 + 0.35 * (combo - 1);
@@ -635,7 +654,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   /** Put the layer back without turning it (a cancelled preview). */
   function abandonTwist(ctx: TwistCtx): void {
-    ctx.objs.forEach((o) => cube.attach(o));
+    // Casings always go back; a shell only if it is still on the board (sync() may have replaced it).
+    ctx.objs.forEach((o) => (casings.includes(o) || shells.includes(o) ? cube.attach(o) : o.removeFromParent()));
     cube.remove(ctx.pivot);
     for (const i of ctx.moving) {
       casings[i].position.copy(slot(i));
@@ -645,6 +665,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   async function twist(t: Twist, p?: Player): Promise<void> {
+    const e0 = epoch;
     let ctx: TwistCtx;
     let ring: any = null;
     if (preview && sameTwist(preview.t, t)) {
@@ -677,6 +698,13 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       });
     }
     const { perm, moving, objs, pivot } = ctx;
+    if (e0 !== epoch) {
+      // A new board arrived mid-turn (a match started over the menu demo): put the layer's
+      // blocks back, drop the old paint that was turning with it, and leave the new board alone.
+      ring?.removeFromParent();
+      abandonTwist(ctx);
+      return;
+    }
     if (ring) {
       cube.attach(ring);
       dropStreak(ring);
@@ -723,6 +751,7 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
   }
 
   async function fade(cell: number): Promise<void> {
+    const e0 = epoch;
     const s = shells[cell];
     const p = owners[cell];
     if (!s || p === null) return;
@@ -736,6 +765,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       dry.emissiveIntensity = 0.04 * (1 - k);
       s.position.copy(slot(cell)).add(new T.Vector3((Math.random() - 0.5) * 0.03 * k, (Math.random() - 0.5) * 0.03 * k, 0));
     });
+    if (e0 !== epoch) {
+      s.removeFromParent();
+      return;
+    }
     const pos = toWorld(cell);
     fx.flakes(pos, '#6b6475', 26, 0.09);
     fx.burst(pos, '#5c5566', 10, 1.4, 0.04);
@@ -1128,7 +1161,9 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     const pos = toWorld(cell);
     sfx.whoosh();
     fx.mist(pos.clone().addScaledVector(towardCamera(pos), 0.4), '#e9e4f2', 90, 4);
+    const e0 = epoch;
     await anim(0.3, (k) => s.scale.setScalar(1 - 0.9 * ease.inCubic(k)));
+    if (e0 !== epoch) return void s.removeFromParent();
     fx.burst(pos, PLAYER_COLORS[p], 16, 3, 0.05);
     hit({ shake: 0.15 });
     removeShell(cell);
@@ -1138,8 +1173,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     if (flip) {
       // The whole cube somersaults, then the paint lands where the rules put it.
       sfx.whoosh();
+      const e0 = epoch;
       await anim(0.6, (k) => (spinX = Math.PI * 2 * ease.inOutCubic(k)));
       spinX = 0;
+      if (e0 !== epoch) return;
       const moved = moves.map((m) => ({ ...m, s: shells[m.from] }));
       for (const m of moved) {
         shells[m.from] = null;
@@ -1191,8 +1228,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
     sfx.whoosh();
     hit({ aberr: 0.03, flash: 0.15 });
     const y0 = yaw;
+    const e0 = epoch;
     await anim(0.5, (k) => (yaw = y0 - Math.PI * 2 * ease.inOutCubic(k)));
     yaw = y0;
+    if (e0 !== epoch) return;
     for (let i = 0; i < CELLS; i++) {
       if (owners[i] === cells[i]) continue;
       if (shells[i]) removeShell(i);
@@ -1203,6 +1242,10 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   function sync(cells: readonly Cell[], cracking: readonly number[] = []): void {
     epoch++;
+    if (preview) {
+      abandonTwist(preview);
+      preview = null;
+    }
     clearTag();
     showAim(null);
     for (let i = 0; i < CELLS; i++) {
@@ -1632,6 +1675,24 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
 
   const board: Board = {
     stats: () => ({ ratio: pixelRatio, fps: stats.fps, level, levels: steps.length }),
+    marksShown: () => {
+      // Every mark mesh hanging anywhere under the cube (a twisting layer's pivot too), by the
+      // cell it sits nearest to.
+      const out: number[] = [];
+      cube.updateMatrixWorld();
+      cube.traverse((o: any) => {
+        if (!o.userData?.mark) return;
+        const p = cube.worldToLocal(o.getWorldPosition(new T.Vector3()));
+        let best = 0;
+        let d = Infinity;
+        for (let i = 0; i < CELLS; i++) {
+          const dd = slot(i).distanceTo(p);
+          if (dd < d) [best, d] = [i, dd];
+        }
+        out.push(best);
+      });
+      return out.sort((a, b) => a - b);
+    },
     onTap: null,
     onTwistIntent: null,
     onTwistReady: null,
@@ -1644,6 +1705,8 @@ export function createBoard(T: Three, host: HTMLElement, sfx: Sfx, manual = fals
       await anim(0.2, (k) => turnTo(ctx, from * (1 - ease.outCubic(k))));
       abandonTwist(ctx);
     },
+    twistFor: (cell, dx, dy, face) =>
+      twistFromSwipe(cell, face ? slot(cell).add(new T.Vector3(...face).multiplyScalar(SPACING * 0.5)) : slot(cell).multiplyScalar(1.5), dx, dy)?.t ?? null,
     swipe(cell, dx, dy) {
       const tw = twistFromSwipe(cell, slot(cell).multiplyScalar(1.5), dx, dy);
       if (!tw || board.onTwistIntent?.(tw.t) === false) return null;

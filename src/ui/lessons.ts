@@ -43,6 +43,8 @@ export interface Lesson {
   simple?: boolean;
   /** Steps with no moves get a power use and a normal move picked from the position. */
   auto?: AbilityId;
+  /** No agents: the plain game (the first-time demo). `picks` is ignored. */
+  classic?: boolean;
 }
 
 const place = (cell: number): Move => ({ kind: 'place', cell });
@@ -377,7 +379,7 @@ export function lessonMove(m: MatchState, mv: Move, realTimers = false): { state
 
 /** Build a lesson's position: a fresh match with the setup moves played. */
 export function lessonStart(l: Lesson, moves: Move[] = l.setup): MatchState {
-  let m = newMatch(l.mode, 0, l.picks, !!l.simple);
+  let m = l.classic ? newMatch(l.mode, 0) : newMatch(l.mode, 0, l.picks, !!l.simple);
   for (const mv of moves) m = lessonMove(m, mv, l.realTimers).state;
   return m;
 }
@@ -453,3 +455,32 @@ export const ALL_TOPICS: Topic[] = ['powers', 'wet', 'timers', 'ult'];
 /** Every power that has a lesson, by rule set. */
 export const lessonPowers = (simple: boolean): AbilityId[] =>
   [...new Set(AGENT_IDS.flatMap((a) => [...(simple ? SIMPLE_POWERS[a] : AGENTS[a].powers), AGENTS[a].ult]))];
+
+/**
+ * The first-time demo: the whole plain game in one short watch, played by the real rules
+ * (test/lessons.test.ts plays it). Orange can't just paint the winning block at the end,
+ * because a 4th mark would fade their oldest: the twist is what wins.
+ */
+export const BASICS: Lesson = {
+  key: 'basics',
+  title: 'How to play',
+  mode: 'rotating',
+  picks: ['blitz', 'stencil'],
+  classic: true,
+  setup: [],
+  steps: [
+    { say: 'Tic Tac Three is tic-tac-toe on a cube of 3 × 3 × 3 blocks. Two players take turns painting blocks. Orange goes first.', moves: [place(16)] },
+    { say: 'Then Blue.', moves: [place(26)] },
+    { say: 'Three in a row wins the round. A row can run any way: across, up and down, front to back, or corner to corner, like this one.', focus: [8, 16, 24] },
+    { say: 'Orange paints right next to their first block: two in a row. Blue has to block the third block, or Orange wins next turn.', moves: [place(15), place(17)], focus: [15, 16, 17] },
+    { say: 'Each player keeps at most 3 marks. The small numbers show their age: 1 is the oldest.', moves: [place(8), place(0)] },
+    { say: 'Paint a 4th, and your number 1 fades away. Watch Orange’s 1.', moves: [place(24)], focus: [16] },
+    { say: 'Blue paints where Orange’s mark faded.', moves: [place(16)] },
+    {
+      say: 'Instead of painting, you can twist a layer: swipe across the cube. Everything in that layer turns, yours and theirs. Orange twists the bottom layer and lines up three. Orange wins the round!',
+      moves: [twist(2, 0, 1)],
+      ends: true,
+    },
+    { say: 'Win 2 rounds to win the match. Now it’s your turn to try!' },
+  ],
+};

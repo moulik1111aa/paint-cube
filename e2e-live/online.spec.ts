@@ -7,7 +7,7 @@ async function phone(browser: Browser, name: string): Promise<Page> {
   const ctx = await browser.newContext({ viewport: { width: 412, height: 906 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.log(`[${name}] page error:`, e.message));
-  await page.addInitScript((n) => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: n, mode: 'rotating', sound: false, voice: false, music: 'off', seenHelp: ['rotating', 'cascade', 'agents'] })), name);
+  await page.addInitScript((n) => localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: n, mode: 'rotating', sound: false, voice: false, music: 'off', seenHelp: ['rotating', 'cascade', 'agents'] })), name);
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
   return page;

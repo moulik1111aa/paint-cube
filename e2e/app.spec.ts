@@ -30,6 +30,10 @@ test('first launch to a finished local Twist match, then a Cascade line', async 
   await page.fill('#nick', '  Moulik  ');
   await page.click('form .btn');
   await expect(page.locator('.hello')).toContainText('Moulik');
+  // First time: the welcome question. Skip it; it doesn't come back.
+  await expect(page.locator('.welcome h2')).toHaveText('Playing for the first time?');
+  await page.click('.welcome [data-go="skip"]');
+  await expect(page.locator('.welcome')).toHaveCount(0);
 
   // Local setup: Twist, Player 2 named.
   await page.click('[data-go="local"]');
@@ -101,7 +105,7 @@ test('twisting: swipe, confirm, refused when you twisted last turn, cancel chang
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="local"]');
@@ -141,7 +145,7 @@ test('online: create a room, a guest joins by code, moves flow both ways, host r
   test.setTimeout(300_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: '', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
+  await page.addInitScript(() => localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', player2: '', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'] })));
   await page.goto('/?manual&memrelay');
   await page.waitForFunction(() => window.__game?.ready);
   await page.click('[data-go="online"]');
@@ -186,7 +190,7 @@ test('agents (Pro abilities): toggle on, both players lock in, a targeted power,
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'], pro: true })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, seenHelp: ['rotating', 'cascade'], pro: true })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
@@ -301,7 +305,7 @@ test('vs PC: the PC answers every move, in Classic and with agents, and the matc
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'] })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'] })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
@@ -353,7 +357,7 @@ test('trial: try a writer against an easy PC with every power ready each turn; w
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, pro: true, seenHelp: ['rotating', 'cascade', 'agents'] })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, pro: true, seenHelp: ['rotating', 'cascade', 'agents'] })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
@@ -392,7 +396,7 @@ test('Simple abilities (default): once per round, no finishing your own row on a
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.addInitScript(() =>
-    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'], agents: true, picks: ['blitz', 'stencil'] })),
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', player2: 'Riya', mode: 'rotating', sound: false, voice: false, seenHelp: ['rotating', 'cascade', 'agents'], agents: true, picks: ['blitz', 'stencil'] })),
   );
   await page.goto('/?manual');
   await page.waitForFunction(() => window.__game?.ready);
@@ -419,5 +423,115 @@ test('Simple abilities (default): once per round, no finishing your own row on a
   // Stencil has the Simple powers.
   await expect(page.locator('.ab[data-ab="shield"]')).toHaveCount(1);
   await expect(page.locator('.ab[data-ab="relocate"]')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('a match started while the menu demo is mid-twist or mid-burst starts on a clean board', async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, music: 'off', seenHelp: ['rotating', 'cascade', 'agents'], firstRun: false })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  // The demo board: marks all over the left layer (x = 0) plus a few more, then a twist of
+  // that layer starts animating, the way the menu demo does it.
+  const cells: (0 | 1 | null)[] = Array(27).fill(null);
+  [0, 6, 18, 24].forEach((c) => (cells[c] = 0));
+  [3, 9, 21, 1].forEach((c) => (cells[c] = 1));
+  await page.evaluate((cs) => window.__game!.demoPlay(cs, [{ type: 'twisted', twist: { axis: 0, slice: 0, dir: 1 }, moves: [], player: 0 }]), cells);
+  await page.evaluate(() => window.__game!.advance(0.15, true)); // mid-turn
+  expect((await page.evaluate(() => window.__game!.marksShown())).length).toBe(8);
+
+  await page.click('[data-go="local"]');
+  await page.click('[data-mode="rotating"]');
+  await page.click('[data-go="start"]');
+  for (let i = 0; i < 30; i++) await page.evaluate(() => window.__game!.advance(1 / 20, false));
+  expect(await page.evaluate(() => window.__game!.state()!.round.cells.filter((c) => c !== null).length)).toBe(0);
+  expect(await page.evaluate(() => window.__game!.marksShown())).toEqual([]);
+
+  // The same with a line bursting (Cascade's demo) and a mark fading (Twist's 3-mark cap).
+  await page.click('.back');
+  const line: (0 | 1 | null)[] = Array(27).fill(null);
+  [0, 1, 2].forEach((c) => (line[c] = 0));
+  line[5] = 1;
+  await page.evaluate(
+    (cs) =>
+      window.__game!.demoPlay(cs, [
+        { type: 'faded', cell: 5, player: 1 },
+        { type: 'lineCompleted', cells: [0, 1, 2], player: 0, wave: 1 },
+      ] as never),
+    line,
+  );
+  await page.evaluate(() => window.__game!.advance(0.1, true));
+  await page.click('[data-go="local"]');
+  await page.click('[data-mode="rotating"]');
+  await page.click('[data-go="start"]');
+  for (let i = 0; i < 40; i++) await page.evaluate(() => window.__game!.advance(1 / 20, false));
+  expect(await page.evaluate(() => window.__game!.marksShown())).toEqual([]);
+  // And the first real mark lands where it was painted, nowhere else.
+  await page.evaluate(() => void window.__game!.tap(4));
+  for (let i = 0; i < 40; i++) await page.evaluate(() => window.__game!.advance(1 / 20, false));
+  expect(await page.evaluate(() => window.__game!.marksShown())).toEqual([4]);
+  expect(errors).toEqual([]);
+});
+
+test('first time: say yes, watch the demo, then the coach guides you to a win against the computer', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ nickname: 'Moulik', mode: 'rotating', sound: false, voice: false, music: 'off', seenHelp: [] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await expect(page.locator('.welcome h2')).toHaveText('Playing for the first time?');
+  await page.click('.welcome [data-go="teach"]');
+
+  // The demo: step through to the end (each step plays on the manual clock).
+  await expect(page.locator('.lesson .kicker')).toContainText('How to play');
+  for (let i = 0; i < 20; i++) {
+    const next = page.locator('.lesson [data-next]');
+    if (!(await next.count())) break;
+    // The step's moves animate on the manual clock: step it until Next is enabled.
+    for (let k = 0; k < 600 && (await next.isDisabled()); k++) await page.evaluate(() => window.__game!.advance(1 / 20, false));
+    await expect(next).toBeEnabled();
+    const label = (await next.textContent()) ?? '';
+    await next.click();
+    if (label.includes('Now you try')) break;
+  }
+  // The practice game: the coach card, the first block glowing.
+  await expect(page.locator('.coach')).toContainText('Tap the glowing block');
+  await expect(page.locator('.tagbox.p2 b')).toHaveText('PC');
+  // A different block is refused with a pointer to the glowing one.
+  await tap(page, 0);
+  await expect(page.locator('.toast')).toContainText('glowing block');
+  expect(await page.evaluate(() => window.__game!.state()!.round.cells.filter((c) => c !== null).length)).toBe(0);
+
+  // Follow the coach: 8, 15, 23 (the block), 16 (your oldest fades); the computer replies each time.
+  for (const [cell, total] of [[8, 2], [15, 4], [23, 6], [16, 7]] as const) {
+    await tap(page, cell);
+    for (let i = 0; i < 200; i++) {
+      await page.evaluate(() => window.__game!.advance(1 / 20, false));
+      const s = await page.evaluate(() => ({ turn: window.__game!.state()!.round.turn, busy: window.__game!.busy() }));
+      if (s.turn === 0 && !s.busy) break;
+    }
+    await settle(page);
+    // (After 16 your 4th mark fades your oldest, and the computer's 4th fades its own.)
+    expect(await page.evaluate(() => window.__game!.state()!.round.cells.filter((c) => c !== null).length)).toBe(total === 7 ? 6 : total);
+  }
+  // Last turn: twist. A tap is refused; "Do it for me" makes the twist and wins.
+  await expect(page.locator('.coach')).toContainText('twist');
+  await tap(page, 25);
+  await expect(page.locator('.toast')).toContainText('twist');
+  await page.click('.coach [data-showme]');
+  await settle(page);
+  await expect(page.locator('.result h2')).toContainText('You won');
+  expect(await page.evaluate(() => window.__game!.state()!.round.result?.winner)).toBe(0);
+  // Practice isn't saved as a match to resume, and the welcome doesn't come back.
+  await page.click('.result [data-go="home"]');
+  await expect(page.locator('[data-go="resume"]')).toHaveCount(0);
+  await expect(page.locator('.welcome')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
