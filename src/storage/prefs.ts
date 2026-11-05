@@ -22,8 +22,11 @@ export interface Prefs {
   agents: boolean;
   /** The last agents each player picked (the select screen starts there). */
   picks: [AgentId, AgentId];
-  /** Read the tutorials aloud. */
+  /** Read the tutorials aloud (off unless turned on in Settings). */
   voice: boolean;
+  /** Read-aloud was set in Settings (before build 24 it defaulted on, so an old saved
+   *  'on' without this switches off once). */
+  voicePicked: boolean;
   /** Last vs-PC difficulty. */
   pcLevel: PcLevel;
   /** Agents: the original Pro abilities (wet paint, timers) instead of Simple. */
@@ -44,7 +47,7 @@ export interface Prefs {
 }
 
 const KEY = 'paintcube.prefs';
-const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: true, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'notebook', buzz: true, musicVol: 2, themePicked: false, welcomed: false };
+const DEFAULTS: Prefs = { nickname: '', player2: '', mode: 'rotating', sound: true, seenHelp: [], agents: false, picks: ['blitz', 'stencil'], voice: false, pcLevel: 'normal', pro: false, music: 'lofi', theme: 'notebook', buzz: true, musicVol: 2, themePicked: false, welcomed: false, voicePicked: false };
 const isAgent = (x: unknown): x is AgentId => AGENT_IDS.includes(x as AgentId);
 
 export function loadPrefs(): Prefs {
@@ -59,7 +62,8 @@ export function loadPrefs(): Prefs {
       sound: p.sound !== false,
       seenHelp: Array.isArray(p.seenHelp) ? p.seenHelp.filter((m): m is HelpTopic => m === 'rotating' || m === 'cascade' || m === 'agents') : [],
       agents: p.agents === true,
-      voice: p.voice !== false,
+      voice: p.voice === true && p.voicePicked === true,
+      voicePicked: p.voicePicked === true,
       pcLevel: isLevel(p.pcLevel) ? p.pcLevel : 'normal',
       pro: p.pro === true,
       music: (['off', 'lofi', 'zen', 'street', 'night'] as const).includes(p.music as never) ? (p.music as TrackId) : 'lofi',

@@ -535,3 +535,29 @@ test('first time: say yes, watch the demo, then the coach guides you to a win ag
   await expect(page.locator('.welcome')).toHaveCount(0);
   expect(errors).toEqual([]);
 });
+
+test('read aloud is off by default, even for an old install that had it on, and only Settings turns it on', async ({ page }) => {
+  // An install from before build 24: voice was saved as on (the old default).
+  await page.addInitScript(() =>
+    localStorage.setItem('paintcube.prefs', JSON.stringify({ welcomed: true, nickname: 'Moulik', mode: 'rotating', sound: false, voice: true, music: 'off', seenHelp: [] })),
+  );
+  await page.goto('/?manual');
+  await page.waitForFunction(() => window.__game?.ready);
+  await page.click('[data-go="settings"]');
+  const sw = page.locator('.settings [data-set="voice"]');
+  await expect(sw).toHaveAttribute('aria-checked', 'false');
+  // No read-aloud buttons in the tutorial or the how-to-play cards.
+  await page.click('.settings [data-close]');
+  await page.click('[data-go="learn"]');
+  await expect(page.locator('.lesson')).toBeVisible();
+  await expect(page.locator('[data-voice]')).toHaveCount(0);
+  await page.click('.lesson [data-close]');
+  // Turned on in Settings, it stays on after a reload.
+  await page.click('[data-go="settings"]');
+  await page.click('.settings [data-set="voice"]');
+  await expect(sw).toHaveAttribute('aria-checked', 'true');
+  await page.evaluate(() => {
+    const p = JSON.parse(localStorage.getItem('paintcube.prefs')!);
+    if (p.voice !== true || p.voicePicked !== true) throw new Error('voice not saved');
+  });
+});

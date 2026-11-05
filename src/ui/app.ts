@@ -421,13 +421,8 @@ export function startApp(app: HTMLElement): void {
     el.innerHTML =
       `<div class="top"><p class="kicker">Practice · ${Math.min(coach.i + 1, PRACTICE.length)}/${PRACTICE.length}</p>` +
       (twistStep ? '<button class="link" data-showme>Do it for me</button>' : '') +
-      `${voiceBtn()}<button class="link" data-skip>Skip</button></div>` +
+      '<button class="link" data-skip>Skip</button></div>' +
       `<p>${esc(text)}</p>`;
-    el.querySelector('[data-voice]')!.addEventListener('click', () => {
-      setVoice(!prefs.voice);
-      coachDraw();
-      if (prefs.voice) voice.say(text);
-    });
     el.querySelector('[data-skip]')!.addEventListener('click', homeScreen);
     el.querySelector('[data-showme]')?.addEventListener('click', () => {
       if (busy || !match || match.round.turn !== 0) return;
@@ -533,6 +528,8 @@ export function startApp(app: HTMLElement): void {
             if (prefs.buzz) haptics.tap();
           } else if (k === 'voice') {
             setVoice(!prefs.voice);
+            prefs = { ...prefs, voicePicked: true };
+            savePrefs(prefs);
             return draw();
           }
           savePrefs(prefs);
@@ -713,7 +710,7 @@ export function startApp(app: HTMLElement): void {
           ? `<span class="whoacts ${COLORS[m.round.turn]}">${penWords(m.round.turn === 0 ? 'Orange' : 'Blue')}’s turn</span>`
           : '';
       el.innerHTML =
-        `<div class="top"><p class="kicker">${l.classic ? '' : 'Show me · '}${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p>${voiceBtn()}<button class="x" data-close aria-label="Close">✕</button></div>` +
+        `<div class="top"><p class="kicker">${l.classic ? '' : 'Show me · '}${esc(l.title)}${lessons.length > 1 ? ` · ${li + 1}/${lessons.length}` : ''}</p><button class="x" data-close aria-label="Close">✕</button></div>` +
         `<div class="say">${who}<p>${esc(penWords(st.say))}</p>` +
         `<div class="pips">${l.steps.map((_, k) => `<i class="${k === si ? 'on' : k < si ? 'done' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-replay>↺ Replay</button>` +
@@ -721,13 +718,6 @@ export function startApp(app: HTMLElement): void {
         (l.classic ? '' : '<div class="abilities demo" aria-hidden="true"></div>');
       bar(null);
       el.querySelector('[data-close]')!.addEventListener('click', () => close());
-      el.querySelector('[data-voice]')!.addEventListener('click', () => {
-        setVoice(!prefs.voice);
-        const v = el.querySelector('[data-voice]') as HTMLElement;
-        v.textContent = prefs.voice ? '🔊' : '🔇';
-        v.setAttribute('aria-pressed', String(prefs.voice));
-        if (prefs.voice) voice.say(penWords(st.say));
-      });
       el.querySelector('[data-replay]')!.addEventListener('click', () => void start(li));
       el.querySelector('[data-next]')!.addEventListener('click', () => {
         if (running) return;
@@ -977,7 +967,6 @@ export function startApp(app: HTMLElement): void {
     if (!on) voice.stop();
     savePrefs(prefs);
   }
-  const voiceBtn = () => `<button class="voice" data-voice aria-label="Read aloud" aria-pressed="${prefs.voice}">${prefs.voice ? '🔊' : '🔇'}</button>`;
 
   function help(mode: HelpTopic, then?: () => void, at = 0): void {
     const simple = simpleNow();
@@ -990,7 +979,7 @@ export function startApp(app: HTMLElement): void {
     const draw = () => {
       const [t, body, topic] = h.cards[i];
       overlay.innerHTML =
-        `<div class="sheet"><div class="top"><p class="kicker">How to play · ${h.title}</p>${voiceBtn()}</div><h2>${t}</h2><p>${body}</p>` +
+        `<div class="sheet"><div class="top"><p class="kicker">How to play · ${h.title}</p></div><h2>${t}</h2><p>${body}</p>` +
         (topic && board ? '<button class="btn alt showme" data-show>▶ Show me on the cube</button>' : '') +
         `<div class="pips">${h.cards.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>` +
         `<div class="row"><button class="link" data-skip>${i < h.cards.length - 1 ? 'Skip' : ''}</button>` +
@@ -998,10 +987,6 @@ export function startApp(app: HTMLElement): void {
       voice.say(`${t}. ${body.replace(/<br>/g, ' ').replace(/<[^>]+>/g, '')}`);
       overlay.querySelector('[data-next]')!.addEventListener('click', () => (i < h.cards.length - 1 ? (i++, draw()) : close()));
       overlay.querySelector('[data-skip]')!.addEventListener('click', close);
-      overlay.querySelector('[data-voice]')!.addEventListener('click', () => {
-        setVoice(!prefs.voice);
-        draw();
-      });
       overlay.querySelector('[data-show]')?.addEventListener('click', () => {
         overlay.remove();
         runLessons([topicLesson(topic!, simple)], () => help(mode, then, i));
